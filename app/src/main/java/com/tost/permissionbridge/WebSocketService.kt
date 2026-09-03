@@ -29,6 +29,7 @@ class WebSocketService : Service() {
         .retryOnConnectionFailure(true)
         .build()
     private val handler by lazy { Handler(mainLooper) }
+    private val reconnectRunnable = Runnable { if (!stopping) connect() }
     private var webSocket: WebSocket? = null
     private var reconnectAttempt = 0
     private var stopping = false
@@ -41,7 +42,10 @@ class WebSocketService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
             stopping = true
+            handler.removeCallbacks(reconnectRunnable)
             webSocket?.close(1000, "Stopped by user")
+            webSocket = null
+            stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
             return START_NOT_STICKY
         }
@@ -65,6 +69,7 @@ class WebSocketService : Service() {
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(socket: WebSocket, response: Response) {
                 reconnectAttempt = 0
+                handler.removeCallbacks(reconnectRunnable)
                 updateNotification("Connected")
                 val deviceId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID)
                     ?: "unknown-device"
@@ -86,12 +91,12 @@ class WebSocketService : Service() {
             override fun onClosing(socket: WebSocket, code: Int, reason: String) = socket.close(code, reason)
 
             override fun onClosed(socket: WebSocket, code: Int, reason: String) {
-                webSocket = null
+                if (webSocket === socket) webSocket = null
                 if (!stopping) scheduleReconnect()
             }
 
             override fun onFailure(socket: WebSocket, t: Throwable, response: Response?) {
-                webSocket = null
+                if (webSocket === socket) webSocket = null
                 updateNotification("Connection lost; reconnecting")
                 if (!stopping) scheduleReconnect()
             }
@@ -102,14 +107,17 @@ class WebSocketService : Service() {
         val message = try { JSONObject(text) } catch (_: Exception) { return }
         if (message.optString("type") != "command") return
         val id = message.optString("id")
-        val result = JSONObject().apply { put("type", "command_result"); put("id", id) }
+        val result = JSONObject().apply {
+            put("type", "command_result")
+            put("id", id)
+        }
         when (message.optString("command")) {
             "get_status" -> result.put("ok", true).put("status", "online")
             "get_permissions" -> {
                 val granted = PermissionManager.runtimePermissions().filter {
                     ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
                 }
-                result.put("ok", true).put("grantedPermissions", granted.joinToString(","))
+                result.put("ok", true).put("grantedPermissions", granted)
             }
             else -> result.put("ok", false).put("error", "Unsupported command")
         }
@@ -117,10 +125,11 @@ class WebSocketService : Service() {
     }
 
     private fun scheduleReconnect() {
+        handler.removeCallbacks(reconnectRunnable)
         val delayMs = min(60_000L, 2_000L * (1L shl min(reconnectAttempt, 5)))
         reconnectAttempt++
         updateNotification("Reconnecting in ${delayMs / 1000}s")
-        handler.postDelayed({ if (!stopping) connect() }, delayMs)
+        handler.postDelayed(reconnectRunnable, delayMs)
     }
 
     private fun startAsForeground() {
@@ -153,6 +162,9 @@ class WebSocketService : Service() {
     }
 
     override fun onTimeout(startId: Int, fgsType: Int) {
+        webSocket?.close(1000, "Foreground service timeout")
+        webSocket = null
+        stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
 
