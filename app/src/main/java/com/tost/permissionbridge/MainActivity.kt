@@ -1,20 +1,32 @@
 package com.tost.permissionbridge
 
+import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
+import android.view.ViewGroup
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 
 class MainActivity : AppCompatActivity() {
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
-    ) { updateStatus() }
+    ) { renderPermissions() }
 
-    private lateinit var status: TextView
+    private val singlePermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { renderPermissions() }
+
+    private lateinit var permissionContainer: LinearLayout
     private lateinit var serverUrl: EditText
     private lateinit var token: EditText
 
@@ -33,19 +45,6 @@ class MainActivity : AppCompatActivity() {
                 android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
         }
 
-        status = TextView(this).apply {
-            textSize = 16f
-            setPadding(32, 32, 32, 20)
-        }
-
-        val requestButton = Button(this).apply {
-            text = "Request available permissions"
-            setOnClickListener {
-                val missing = PermissionManager.missingPermissions(this@MainActivity)
-                if (missing.isNotEmpty()) permissionLauncher.launch(missing)
-            }
-        }
-
         val connectButton = Button(this).apply {
             text = "Save & connect to server"
             setOnClickListener {
@@ -54,7 +53,6 @@ class MainActivity : AppCompatActivity() {
                     .putString(WebSocketService.KEY_TOKEN, token.text.toString().trim())
                     .apply()
                 WebSocketService.start(this@MainActivity)
-                updateStatus()
             }
         }
 
@@ -63,32 +61,110 @@ class MainActivity : AppCompatActivity() {
             setOnClickListener { WebSocketService.stop(this@MainActivity) }
         }
 
-        val layout = LinearLayout(this).apply {
+        permissionContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+
+        val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(24, 24, 24, 24)
             addView(serverUrl)
             addView(token)
             addView(connectButton)
             addView(stopButton)
-            addView(status)
-            addView(requestButton)
+            addView(TextView(this@MainActivity).apply {
+                text = "Permissions"
+                textSize = 20f
+                setPadding(0, 24, 0, 8)
+            })
+            addView(permissionContainer)
         }
 
-        setContentView(layout)
-        updateStatus()
+        val scroll = ScrollView(this).apply { addView(root) }
+        setContentView(scroll)
+        renderPermissions()
     }
 
     override fun onResume() {
         super.onResume()
-        if (::status.isInitialized) updateStatus()
+        if (::permissionContainer.isInitialized) renderPermissions()
     }
 
-    private fun updateStatus() {
-        val missing = PermissionManager.missingPermissions(this)
-        status.text = if (missing.isEmpty()) {
-            "All currently requestable runtime permissions are granted."
-        } else {
-            "Missing permissions: ${missing.size}\n\n" + missing.joinToString("\n")
+    private fun renderPermissions() {
+        permissionContainer.removeAllViews()
+
+        val runtime = PermissionManager.runtimeCatalog()
+            .filter { Build.VERSION.SDK_INT >= it.minApi }
+        val special = PermissionManager.specialAccessCatalog()
+            .filter { Build.VERSION.SDK_INT >= it.minApi }
+
+        addSection("Runtime permissions")
+        runtime.forEach { entry ->
+            addPermissionRow(entry)
         }
+
+        if (Build.VERSION.SDK_INT >= 29) {
+            addSection("Background location")
+            val granted = ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.ACCESS_BACKGROUND_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED
+            addActionRow(
+                "Background location",
+                if (granted) "Granted" else "Not granted"
+            ) {
+                if (!granted) singlePermissionLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+            }
+        }
+
+        addSection("Special app access")
+        special.forEach { entry ->
+            val granted = PermissionManager.isSpecialAccessGranted(this, entry.id)
+            addActionRow(entry.description, if (granted) "Granted" else "Open Settings") {
+                if (!granted) PermissionManager.specialAccessIntent(this, entry.id)?.let(::startActivity)
+            }
+        }
+
+        addSection("System-only / restricted")
+        permissionContainer.addView(TextView(this).apply {
+            text = "Some permissions are signature, privileged, hard-restricted, or Play-policy restricted. Tost will not pretend they are ordinary runtime permissions. They need a qualifying system role, installer allowlist, default-handler role, or feature-specific approval."
+            setPadding(0, 0, 0, 12)
+        })
+    }
+
+    private fun addSection(title: String) {
+        permissionContainer.addView(TextView(this).apply {
+            text = title
+            textSize = 18f
+            setPadding(0, 18, 0, 8)
+        })
+    }
+
+    private fun addPermissionRow(entry: PermissionEntry) {
+        val permission = entry.permission ?: return
+        val granted = ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
+        addActionRow(entry.description, if (granted) "Granted" else "Request") {
+            if (!granted) singlePermissionLauncher.launch(permission)
+        }
+    }
+
+    private fun addActionRow(label: String, actionText: String, action: () -> Unit) {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, 4, 0, 4)
+        }
+        val labelView = TextView(this).apply {
+            text = label
+            textSize = 15f
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        val button = Button(this).apply {
+            text = actionText
+            isEnabled = actionText != "Granted"
+            setOnClickListener { action() }
+        }
+        row.addView(labelView)
+        row.addView(button)
+        permissionContainer.addView(row)
     }
 }
