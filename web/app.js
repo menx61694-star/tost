@@ -1,46 +1,121 @@
 const $ = id => document.getElementById(id);
 
+let authToken = "";
+let socket = null;
+let devices = [];
+
 $("connect").onclick = async () => {
   const token = $("token").value.trim();
   if (!token) return;
+  authToken = token;
+
   try {
-    const r = await fetch("/api/devices", { headers: { Authorization: `Bearer ${token}` } });
+    const r = await fetch("/api/devices", {
+      headers: { Authorization: `Bearer ${authToken}` }
+    });
     if (!r.ok) throw new Error("Unauthorized");
-    const devices = await r.json();
+    devices = await r.json();
     $("server").textContent = "Connected";
-    render(devices, token);
+    render();
+    connectLive();
   } catch (e) {
     $("server").textContent = "Connection failed";
     $("devices").textContent = e.message;
   }
 };
 
-function render(devices, token) {
+function connectLive() {
+  if (socket) socket.close();
+  const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+  socket = new WebSocket(`${protocol}//${location.host}/ws?token=${encodeURIComponent(authToken)}`);
+
+  socket.onopen = () => {
+    socket.send(JSON.stringify({ type: "dashboard_hello" }));
+    $("server").textContent = "Live";
+  };
+
+  socket.onmessage = event => {
+    let message;
+    try { message = JSON.parse(event.data); } catch { return; }
+    if (message.type === "devices" && Array.isArray(message.devices)) {
+      devices = message.devices;
+      render();
+    } else if (message.type === "command_result") {
+      const result = message.result || {};
+      const detail = result.ok
+        ? JSON.stringify(result.status ?? result.grantedPermissions ?? result)
+        : (result.error || "Command failed");
+      console.info(`Device ${message.deviceId} result ${message.id}:`, result);
+      showMessage(`Command result: ${detail}`);
+    }
+  };
+
+  socket.onclose = () => {
+    if (authToken) $("server").textContent = "Live disconnected";
+  };
+};
+
+function render() {
   const root = $("devices");
   root.innerHTML = "";
-  if (!devices.length) { root.textContent = "No devices connected."; return; }
+  if (!devices.length) {
+    root.textContent = "No devices connected.";
+    return;
+  }
+
   for (const d of devices) {
     const card = document.createElement("article");
     card.className = "device";
-    card.innerHTML = `<div><strong>${escapeHtml(d.deviceId)}</strong><small>${d.status}</small></div>`;
+
+    const details = document.createElement("div");
+    const name = document.createElement("strong");
+    name.textContent = d.deviceId;
+    const state = document.createElement("small");
+    state.textContent = `${d.status} · last seen ${new Date(d.lastSeen).toLocaleTimeString()}`;
+    details.append(name, state);
+
+    const actions = document.createElement("div");
     const status = document.createElement("button");
     status.textContent = "Get status";
-    status.onclick = () => command(d.deviceId, "get_status", token);
-    card.appendChild(status);
+    status.disabled = d.status !== "online";
+    status.onclick = () => command(d.deviceId, "get_status");
+
+    const permissions = document.createElement("button");
+    permissions.textContent = "Get permissions";
+    permissions.disabled = d.status !== "online";
+    permissions.onclick = () => command(d.deviceId, "get_permissions");
+
+    actions.append(status, permissions);
+    card.append(details, actions);
     root.appendChild(card);
   }
 }
 
-async function command(deviceId, command, token) {
-  const r = await fetch(`/api/devices/${encodeURIComponent(deviceId)}/command`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-    body: JSON.stringify({ command })
-  });
-  const data = await r.json();
-  alert(data.ok ? `Command sent: ${data.id}` : data.error);
+async function command(deviceId, commandName) {
+  try {
+    const r = await fetch(`/api/devices/${encodeURIComponent(deviceId)}/command`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${authToken}`
+      },
+      body: JSON.stringify({ command: commandName })
+    });
+    const data = await r.json();
+    if (!r.ok || !data.ok) throw new Error(data.error || "Command failed");
+    showMessage(`Command sent: ${data.id}`);
+  } catch (e) {
+    showMessage(e.message);
+  }
 }
 
-function escapeHtml(value) {
-  return String(value).replace(/[&<>\"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+function showMessage(message) {
+  let node = $("message");
+  if (!node) {
+    node = document.createElement("div");
+    node.id = "message";
+    node.setAttribute("role", "status");
+    $("devices").before(node);
+  }
+  node.textContent = message;
 }
