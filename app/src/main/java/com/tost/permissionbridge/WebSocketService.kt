@@ -65,7 +65,10 @@ class WebSocketService : Service() {
             return
         }
 
-        val request = Request.Builder().url(endpoint).addQueryParameter("token", token).build()
+        val request = Request.Builder()
+            .url(endpoint)
+            .header("Authorization", "Bearer $token")
+            .build()
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(socket: WebSocket, response: Response) {
                 reconnectAttempt = 0
