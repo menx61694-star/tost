@@ -6,11 +6,14 @@ import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
 import android.provider.Settings
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
+import androidx.core.content.ContextCompat
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -21,12 +24,11 @@ import java.util.concurrent.TimeUnit
 import kotlin.math.min
 
 class WebSocketService : Service() {
-
     private val client = OkHttpClient.Builder()
         .pingInterval(20, TimeUnit.SECONDS)
         .retryOnConnectionFailure(true)
         .build()
-
+    private val handler by lazy { Handler(mainLooper) }
     private var webSocket: WebSocket? = null
     private var reconnectAttempt = 0
     private var stopping = false
@@ -43,7 +45,6 @@ class WebSocketService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
-
         stopping = false
         startAsForeground()
         connect()
@@ -52,26 +53,19 @@ class WebSocketService : Service() {
 
     private fun connect() {
         if (stopping || webSocket != null) return
-
         val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
         val endpoint = prefs.getString(KEY_SERVER_URL, "")?.trim().orEmpty()
         val token = prefs.getString(KEY_TOKEN, "")?.trim().orEmpty()
-
         if (endpoint.isBlank() || token.isBlank()) {
             updateNotification("Server URL and token are required")
             return
         }
 
-        val request = Request.Builder()
-            .url(endpoint)
-            .addQueryParameter("token", token)
-            .build()
-
+        val request = Request.Builder().url(endpoint).addQueryParameter("token", token).build()
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(socket: WebSocket, response: Response) {
                 reconnectAttempt = 0
                 updateNotification("Connected")
-
                 val deviceId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID)
                     ?: "unknown-device"
                 val info = JSONObject().apply {
@@ -87,13 +81,9 @@ class WebSocketService : Service() {
                 }.toString())
             }
 
-            override fun onMessage(socket: WebSocket, text: String) {
-                handleMessage(socket, text)
-            }
+            override fun onMessage(socket: WebSocket, text: String) = handleMessage(socket, text)
 
-            override fun onClosing(socket: WebSocket, code: Int, reason: String) {
-                socket.close(code, reason)
-            }
+            override fun onClosing(socket: WebSocket, code: Int, reason: String) = socket.close(code, reason)
 
             override fun onClosed(socket: WebSocket, code: Int, reason: String) {
                 webSocket = null
@@ -111,57 +101,34 @@ class WebSocketService : Service() {
     private fun handleMessage(socket: WebSocket, text: String) {
         val message = try { JSONObject(text) } catch (_: Exception) { return }
         if (message.optString("type") != "command") return
-
         val id = message.optString("id")
+        val result = JSONObject().apply { put("type", "command_result"); put("id", id) }
         when (message.optString("command")) {
-            "get_status" -> {
-                socket.send(JSONObject().apply {
-                    put("type", "command_result")
-                    put("id", id)
-                    put("ok", true)
-                    put("status", "online")
-                }.toString())
-            }
+            "get_status" -> result.put("ok", true).put("status", "online")
             "get_permissions" -> {
                 val granted = PermissionManager.runtimePermissions().filter {
-                    androidx.core.content.ContextCompat.checkSelfPermission(
-                        this,
-                        it
-                    ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                    ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
                 }
-                socket.send(JSONObject().apply {
-                    put("type", "command_result")
-                    put("id", id)
-                    put("ok", true)
-                    put("grantedPermissions", granted.joinToString(","))
-                }.toString())
+                result.put("ok", true).put("grantedPermissions", granted.joinToString(","))
             }
-            else -> {
-                socket.send(JSONObject().apply {
-                    put("type", "command_result")
-                    put("id", id)
-                    put("ok", false)
-                    put("error", "Unsupported command")
-                }.toString())
-            }
+            else -> result.put("ok", false).put("error", "Unsupported command")
         }
+        socket.send(result.toString())
     }
 
     private fun scheduleReconnect() {
         val delayMs = min(60_000L, 2_000L * (1L shl min(reconnectAttempt, 5)))
         reconnectAttempt++
         updateNotification("Reconnecting in ${delayMs / 1000}s")
-        android.os.Handler(mainLooper).postDelayed({
-            if (!stopping) connect()
-        }, delayMs)
+        handler.postDelayed({ if (!stopping) connect() }, delayMs)
     }
 
     private fun startAsForeground() {
         val notification = buildNotification("Connecting…")
-        val serviceType = if (Build.VERSION.SDK_INT >= 29) {
+        val type = if (Build.VERSION.SDK_INT >= 29) {
             android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
         } else 0
-        ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, serviceType)
+        ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, type)
     }
 
     private fun buildNotification(text: String): Notification =
@@ -174,28 +141,24 @@ class WebSocketService : Service() {
             .build()
 
     private fun updateNotification(text: String) {
-        val manager = getSystemService(NotificationManager::class.java)
-        manager.notify(NOTIFICATION_ID, buildNotification(text))
+        getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, buildNotification(text))
     }
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= 26) {
-            val channel = NotificationChannel(
-                CHANNEL_ID,
-                "Tost connection",
-                NotificationManager.IMPORTANCE_LOW
+            getSystemService(NotificationManager::class.java).createNotificationChannel(
+                NotificationChannel(CHANNEL_ID, "Tost connection", NotificationManager.IMPORTANCE_LOW)
             )
-            getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         }
     }
 
-    override fun onTimeout(startId: Int) {
-        // Android 15+ can call this for dataSync foreground-service time limits.
+    override fun onTimeout(startId: Int, fgsType: Int) {
         stopSelf()
     }
 
     override fun onDestroy() {
         stopping = true
+        handler.removeCallbacksAndMessages(null)
         webSocket?.close(1000, "Service destroyed")
         webSocket = null
         client.dispatcher.executorService.shutdown()
@@ -212,13 +175,12 @@ class WebSocketService : Service() {
         private const val CHANNEL_ID = "tost_connection"
         private const val NOTIFICATION_ID = 1001
 
-        fun start(context: Context) {
-            val intent = Intent(context, WebSocketService::class.java)
-            androidx.core.content.ContextCompat.startForegroundService(context, intent)
-        }
+        fun start(context: Context) = ContextCompat.startForegroundService(
+            context, Intent(context, WebSocketService::class.java)
+        )
 
-        fun stop(context: Context) {
-            context.startService(Intent(context, WebSocketService::class.java).setAction(ACTION_STOP))
-        }
+        fun stop(context: Context) = context.startService(
+            Intent(context, WebSocketService::class.java).setAction(ACTION_STOP)
+        )
     }
 }
