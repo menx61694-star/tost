@@ -1,6 +1,7 @@
 import express from "express";
 import http from "node:http";
 import { WebSocketServer, WebSocket } from "ws";
+import crypto from "node:crypto";
 
 const PORT = Number(process.env.PORT || 8080);
 const DEVICE_TOKEN = process.env.DEVICE_TOKEN || "change-me";
@@ -39,8 +40,8 @@ function publicDevices() {
 }
 
 wss.on("connection", (socket, req) => {
-  const token = new URL(req.url, "http://localhost").searchParams.get("token");
-  if (token !== DEVICE_TOKEN) {
+  const auth = req.headers.authorization || "";
+  if (auth !== `Bearer ${DEVICE_TOKEN}`) {
     socket.close(1008, "Unauthorized");
     return;
   }
