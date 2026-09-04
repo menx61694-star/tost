@@ -92,7 +92,8 @@ function render() {
       ["Network", "get_network"],
       ["Permissions", "get_permissions"],
       ["Contacts count", "get_contacts_count"],
-      ["Calendar count", "get_calendar_count"]
+      ["Calendar count", "get_calendar_count"],
+      ["Location", "get_location"]
     ]) {
       const button = document.createElement("button");
       button.textContent = label;
@@ -132,6 +133,11 @@ function formatResult(result) {
   if (result.model) return `device: ${result.manufacturer || ""} ${result.model} · Android API ${result.androidApi}`.trim();
   if (result.contactsCount !== undefined) return `contacts: ${result.contactsCount}`;
   if (result.calendarCount !== undefined) return `calendars: ${result.calendarCount}`;
+  if (result.latitude !== undefined && result.longitude !== undefined) {
+    const ageSeconds = Math.max(0, Math.round((Date.now() - result.timestamp) / 1000));
+    const accuracy = Number.isFinite(Number(result.accuracyMeters)) ? ` ±${Math.round(Number(result.accuracyMeters))}m` : "";
+    return `location: ${result.latitude}, ${result.longitude}${accuracy} · ${ageSeconds}s old`;
+  }
   return JSON.stringify(result);
 }
 
