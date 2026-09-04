@@ -6,6 +6,7 @@ import crypto from "node:crypto";
 const PORT = Number(process.env.PORT || 8080);
 const DEVICE_TOKEN = process.env.DEVICE_TOKEN || "change-me";
 const DASHBOARD_SESSION_TTL_MS = 60 * 60 * 1000;
+const WS_HEARTBEAT_INTERVAL_MS = 30_000;
 
 const app = express();
 app.use(express.json({ limit: "32kb" }));
@@ -77,6 +78,7 @@ wss.on("connection", (socket, req) => {
     const device = devices.get(deviceId);
     if (!device || device.socket !== socket) return;
     device.lastSeen = Date.now();
+    device.alive = true;
   });
 
   socket.on("message", raw => {
@@ -85,12 +87,19 @@ wss.on("connection", (socket, req) => {
 
     if (message.type === "register" && typeof message.deviceId === "string") {
       if (!deviceAuthorized) return;
+
+      const previous = devices.get(message.deviceId);
+      if (previous?.socket && previous.socket !== socket) {
+        previous.socket.close(4001, "Replaced by a newer connection");
+      }
+
       deviceId = message.deviceId;
       devices.set(deviceId, {
         socket,
         status: "online",
         lastSeen: Date.now(),
-        info: message.info || {}
+        info: message.info || {},
+        alive: true
       });
       sendJson(socket, { type: "registered", deviceId });
       broadcast({ type: "devices", devices: publicDevices() });
@@ -109,6 +118,7 @@ wss.on("connection", (socket, req) => {
     const device = devices.get(deviceId);
     if (!device || device.socket !== socket) return;
     device.lastSeen = Date.now();
+    device.alive = true;
     device.lastMessage = message;
 
     if (message.type === "command_result") {
@@ -129,6 +139,26 @@ wss.on("connection", (socket, req) => {
     }
   });
 });
+
+const heartbeatTimer = setInterval(() => {
+  for (const socket of wss.clients) {
+    if (socket.readyState !== WebSocket.OPEN) continue;
+
+    const deviceId = [...devices.entries()].find(([, device]) => device.socket === socket)?.[0];
+    if (deviceId) {
+      const device = devices.get(deviceId);
+      if (!device) continue;
+      if (device.alive === false) {
+        socket.terminate();
+        continue;
+      }
+      device.alive = false;
+    }
+    socket.ping();
+  }
+}, WS_HEARTBEAT_INTERVAL_MS);
+
+wss.on("close", () => clearInterval(heartbeatTimer));
 
 app.get("/api/devices", (req, res) => {
   if (!authorized(req)) return res.status(401).json({ error: "Unauthorized" });
