@@ -9,8 +9,13 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 .devices { margin-top: 18px; display: grid; gap: 10px; }
 .device { padding: 14px; border: 1px solid #292e39; border-radius: 12px; flex-wrap: wrap; }
 .device > div:first-child { min-width: 180px; }
-.device > div:nth-child(2) { display: flex; flex-wrap: wrap; gap: 8px; }
+.device > div:nth-child(3) { display: flex; flex-wrap: wrap; gap: 8px; }
 small { display: block; opacity: .65; margin-top: 4px; }
+.live-status { width: 100%; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; }
+.live-stat { min-width: 0; padding: 9px 10px; border: 1px solid #292e39; border-radius: 10px; background: #14171d; }
+.live-stat strong { display: block; font-size: .98rem; overflow-wrap: anywhere; }
+.live-stat small { margin-top: 2px; }
+.live-location { grid-column: 1 / -1; margin-top: 0; }
 .map-host { width: 100%; height: 280px; margin-top: 10px; border-radius: 12px; overflow: hidden; background: #222; }
 .history-host { width: 100%; margin-top: 14px; display: grid; gap: 8px; }
 .history-host h3 { margin: 4px 0 0; font-size: 1rem; }
@@ -29,11 +34,13 @@ small { display: block; opacity: .65; margin-top: 4px; }
 .workout-times { margin-top: 10px; }
 .workout button { flex: 0 0 auto; }
 #message { margin-top: 12px; padding: 10px 12px; border-radius: 10px; background: #11141a; border: 1px solid #292e39; }
-@media (max-width: 720px) {
+@media (max-width: 760px) {
+  .live-status { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .workout-stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 620px) {
   main { padding: 18px 12px; }
   .history-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .live-status { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .workout { align-items: flex-start; }
 }
