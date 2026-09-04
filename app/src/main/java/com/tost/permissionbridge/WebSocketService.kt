@@ -7,6 +7,9 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import android.os.BatteryManager
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -123,6 +126,40 @@ class WebSocketService : Service() {
                     ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
                 }
                 result.put("ok", true).put("grantedPermissions", granted)
+            }
+            "get_device_info" -> {
+                result.put("ok", true)
+                    .put("manufacturer", Build.MANUFACTURER)
+                    .put("model", Build.MODEL)
+                    .put("androidApi", Build.VERSION.SDK_INT)
+                    .put("appVersion", BuildConfig.VERSION_NAME)
+                    .put("deviceId", Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID) ?: "unknown-device")
+            }
+            "get_battery" -> {
+                val batteryManager = getSystemService(BatteryManager::class.java)
+                val level = batteryManager?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: -1
+                val chargingStatus = batteryManager?.getIntProperty(BatteryManager.BATTERY_PROPERTY_STATUS) ?: -1
+                val charging = chargingStatus == BatteryManager.BATTERY_STATUS_CHARGING ||
+                    chargingStatus == BatteryManager.BATTERY_STATUS_FULL
+                result.put("ok", true)
+                    .put("percent", level)
+                    .put("charging", charging)
+            }
+            "get_network" -> {
+                val connectivity = getSystemService(ConnectivityManager::class.java)
+                val network = connectivity?.activeNetwork
+                val capabilities = network?.let { connectivity.getNetworkCapabilities(it) }
+                val transport = when {
+                    capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true -> "wifi"
+                    capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) == true -> "cellular"
+                    capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) == true -> "ethernet"
+                    capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true -> "vpn"
+                    else -> "none"
+                }
+                result.put("ok", true)
+                    .put("connected", capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true)
+                    .put("validated", capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true)
+                    .put("transport", transport)
             }
             else -> result.put("ok", false).put("error", "Unsupported command")
         }
