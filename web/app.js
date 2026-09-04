@@ -56,6 +56,10 @@ function connectLive() {
       }
       if (result.ok && Array.isArray(result.workouts)) renderHistory(message.deviceId, result.workouts);
       if (result.ok && result.workout) showWorkout(message.deviceId, result.workout);
+      if (result.ok && message.id && result.commandId === message.id) {
+        // Reserved for future per-command UI handling.
+      }
+      if (result.ok && result.silent) return;
       showMessage(`Command result: ${result.ok ? formatResult(result) : (result.error || "Command failed")}`);
     }
   };
@@ -153,7 +157,7 @@ function renderLiveStatus(deviceId, result) {
   }
 }
 
-async function command(deviceId, commandName, extra = {}) {
+async function command(deviceId, commandName, extra = {}, options = {}) {
   try {
     const r = await fetch(`/api/devices/${encodeURIComponent(deviceId)}/command`, {
       method: "POST",
@@ -162,8 +166,8 @@ async function command(deviceId, commandName, extra = {}) {
     });
     const data = await r.json();
     if (!r.ok || !data.ok) throw new Error(data.error || "Command failed");
-    showMessage(`Command sent: ${data.id}`);
-  } catch (e) { showMessage(e.message); }
+    if (!options.silent) showMessage(`Command sent: ${data.id}`);
+  } catch (e) { if (!options.silent) showMessage(e.message); }
 }
 
 function updateMap(deviceId, result) {
