@@ -6,21 +6,20 @@ let socket = null;
 let devices = [];
 const maps = new Map();
 const liveStates = new Map();
+let liveReconnectTimer = null;
+let liveReconnectAttempt = 0;
+let manualDisconnect = false;
 
 $("connect").onclick = async () => {
   const token = $("token").value.trim();
   if (!token) return;
+  manualDisconnect = false;
   authToken = token;
+  liveReconnectAttempt = 0;
+  if (liveReconnectTimer) clearTimeout(liveReconnectTimer);
 
   try {
-    const r = await fetch("/api/devices", { headers: { Authorization: `Bearer ${authToken}` } });
-    if (!r.ok) throw new Error("Unauthorized");
-    devices = await r.json();
-    const sessionResponse = await fetch("/api/dashboard-session", {
-      method: "POST", headers: { Authorization: `Bearer ${authToken}` }
-    });
-    if (!sessionResponse.ok) throw new Error("Could not create live dashboard session");
-    dashboardSession = (await sessionResponse.json()).token;
+    await refreshDashboardSession();
     $("server").textContent = "Connected";
     render();
     connectLive();
@@ -30,15 +29,36 @@ $("connect").onclick = async () => {
   }
 };
 
+async function refreshDashboardSession() {
+  const r = await fetch("/api/devices", { headers: { Authorization: `Bearer ${authToken}` } });
+  if (!r.ok) throw new Error("Unauthorized");
+  devices = await r.json();
+  const sessionResponse = await fetch("/api/dashboard-session", {
+    method: "POST", headers: { Authorization: `Bearer ${authToken}` }
+  });
+  if (!sessionResponse.ok) throw new Error("Could not create live dashboard session");
+  dashboardSession = (await sessionResponse.json()).token;
+}
+
 function connectLive() {
-  if (socket) socket.close();
+  if (manualDisconnect || !authToken || !dashboardSession) return;
+  if (socket) {
+    socket.onclose = null;
+    socket.close();
+  }
   const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-  socket = new WebSocket(`${protocol}//${location.host}/ws?session=${encodeURIComponent(dashboardSession)}`);
-  socket.onopen = () => {
-    socket.send(JSON.stringify({ type: "dashboard_hello" }));
+  const currentSocket = new WebSocket(`${protocol}//${location.host}/ws?session=${encodeURIComponent(dashboardSession)}`);
+  socket = currentSocket;
+  currentSocket.onopen = () => {
+    if (socket !== currentSocket) return;
+    liveReconnectAttempt = 0;
+    if (liveReconnectTimer) clearTimeout(liveReconnectTimer);
+    liveReconnectTimer = null;
+    currentSocket.send(JSON.stringify({ type: "dashboard_hello" }));
     $("server").textContent = "Live";
   };
-  socket.onmessage = event => {
+  currentSocket.onmessage = event => {
+    if (socket !== currentSocket) return;
     let message;
     try { message = JSON.parse(event.data); } catch { return; }
     if (message.type === "devices" && Array.isArray(message.devices)) {
@@ -56,14 +76,39 @@ function connectLive() {
       }
       if (result.ok && Array.isArray(result.workouts)) renderHistory(message.deviceId, result.workouts);
       if (result.ok && result.workout) showWorkout(message.deviceId, result.workout);
-      if (result.ok && message.id && result.commandId === message.id) {
-        // Reserved for future per-command UI handling.
-      }
       if (result.ok && result.silent) return;
       showMessage(`Command result: ${result.ok ? formatResult(result) : (result.error || "Command failed")}`);
     }
   };
-  socket.onclose = () => { if (authToken) $("server").textContent = "Live disconnected"; };
+  currentSocket.onclose = () => {
+    if (socket !== currentSocket) return;
+    socket = null;
+    if (manualDisconnect || !authToken) return;
+    $("server").textContent = "Live disconnected; reconnecting…";
+    scheduleLiveReconnect();
+  };
+  currentSocket.onerror = () => {
+    if (socket === currentSocket) $("server").textContent = "Live connection error";
+  };
+}
+
+function scheduleLiveReconnect() {
+  if (manualDisconnect || !authToken || liveReconnectTimer) return;
+  const delayMs = Math.min(60_000, 2_000 * (2 ** Math.min(liveReconnectAttempt, 5)));
+  liveReconnectAttempt++;
+  liveReconnectTimer = setTimeout(async () => {
+    liveReconnectTimer = null;
+    if (manualDisconnect || !authToken) return;
+    try {
+      // Refresh the short-lived dashboard session as well as the device snapshot.
+      await refreshDashboardSession();
+      render();
+      connectLive();
+    } catch {
+      $("server").textContent = "Server unavailable; retrying…";
+      scheduleLiveReconnect();
+    }
+  }, delayMs);
 }
 
 function render() {
