@@ -219,9 +219,15 @@ class LocationService : Service() {
 
         val validCoordinates = location.latitude.isFinite() && location.longitude.isFinite() &&
             kotlin.math.abs(location.latitude) <= 90 && kotlin.math.abs(location.longitude) <= 180
+        if (!validCoordinates) return
+
+        // Very old cached fixes should not become the current route position.
+        val ageMs = (System.currentTimeMillis() - location.time).coerceAtLeast(0L)
+        if (ageMs > MAX_LOCATION_AGE_MS) return
+
         val routeLatitude = prefs.getString(KEY_ROUTE_LATITUDE, null)?.toDoubleOrNull()
         val routeLongitude = prefs.getString(KEY_ROUTE_LONGITUDE, null)?.toDoubleOrNull()
-        val distanceFromAcceptedPoint = if (routeLatitude != null && routeLongitude != null && validCoordinates) {
+        val distanceFromAcceptedPoint = if (routeLatitude != null && routeLongitude != null) {
             val results = FloatArray(1)
             Location.distanceBetween(routeLatitude, routeLongitude, location.latitude, location.longitude, results)
             results[0]
@@ -229,7 +235,8 @@ class LocationService : Service() {
 
         val route = try { JSONArray(prefs.getString(KEY_ROUTE, "[]")) } catch (_: Exception) { JSONArray() }
         val farEnough = routeLatitude == null || routeLongitude == null || distanceFromAcceptedPoint >= MIN_ROUTE_DISTANCE_METERS
-        val acceptPoint = validCoordinates &&
+        val accuracyGoodEnough = location.hasAccuracy() && location.accuracy >= 0f && location.accuracy <= MAX_ROUTE_ACCURACY_METERS
+        val acceptPoint = accuracyGoodEnough &&
             (routeLatitude == null || routeLongitude == null || distanceFromAcceptedPoint <= MAX_ROUTE_JUMP_METERS)
 
         if (acceptPoint && farEnough) {
@@ -248,7 +255,7 @@ class LocationService : Service() {
         }
 
         // Keep the latest valid raw fix separately from the route reference point.
-        // A rejected GPS jump therefore cannot poison the next route-distance comparison.
+        // A rejected GPS jump/low-accuracy fix cannot poison route-distance comparison.
         prefs.edit()
             .putLong(KEY_TIME, location.time)
             .putString(KEY_LATITUDE, location.latitude.toString())
@@ -360,6 +367,8 @@ class LocationService : Service() {
         private const val MAX_ROUTE_POINTS = 500
         private const val MIN_ROUTE_DISTANCE_METERS = 5f
         private const val MAX_ROUTE_JUMP_METERS = 500f
+        private const val MAX_ROUTE_ACCURACY_METERS = 75f
+        private const val MAX_LOCATION_AGE_MS = 30_000L
 
         fun start(context: android.content.Context) = ContextCompat.startForegroundService(
             context, Intent(context, LocationService::class.java)
