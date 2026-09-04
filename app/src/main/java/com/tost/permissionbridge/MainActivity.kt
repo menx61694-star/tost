@@ -58,6 +58,16 @@ class MainActivity : AppCompatActivity() {
             setOnClickListener { WebSocketService.stop(this@MainActivity) }
         }
 
+        val locationStartButton = Button(this).apply {
+            text = "Start location session"
+            setOnClickListener { startLocationSession() }
+        }
+
+        val locationStopButton = Button(this).apply {
+            text = "Stop location session"
+            setOnClickListener { LocationService.stop(this@MainActivity) }
+        }
+
         permissionContainer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
         }
@@ -69,6 +79,17 @@ class MainActivity : AppCompatActivity() {
             addView(token)
             addView(connectButton)
             addView(stopButton)
+            addView(TextView(this@MainActivity).apply {
+                text = "Location session"
+                textSize = 20f
+                setPadding(0, 24, 0, 8)
+            })
+            addView(TextView(this@MainActivity).apply {
+                text = "Start this user-visible session before remote location reads. Tost will show an ongoing notification while it is active."
+                setPadding(0, 0, 0, 8)
+            })
+            addView(locationStartButton)
+            addView(locationStopButton)
             addView(TextView(this@MainActivity).apply {
                 text = "Permissions"
                 textSize = 20f
@@ -85,6 +106,21 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         if (::permissionContainer.isInitialized) renderPermissions()
+    }
+
+    private fun startLocationSession() {
+        val hasForegroundLocation = ContextCompat.checkSelfPermission(
+            this, Manifest.permission.ACCESS_COARSE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(
+                this, Manifest.permission.ACCESS_FINE_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED
+
+        if (hasForegroundLocation) {
+            LocationService.start(this)
+        } else {
+            singlePermissionLauncher.launch(Manifest.permission.ACCESS_COARSE_LOCATION)
+        }
     }
 
     private fun renderPermissions() {
