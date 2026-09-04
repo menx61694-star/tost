@@ -14,6 +14,7 @@ import android.os.BatteryManager
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
+import android.provider.CalendarContract
 import android.provider.ContactsContract
 import android.provider.Settings
 import androidx.core.app.NotificationCompat
@@ -175,6 +176,20 @@ class WebSocketService : Service() {
                         null
                     )?.use { it.count } ?: 0
                     result.put("ok", true).put("contactsCount", count)
+                }
+            }
+            "get_calendar_count" -> {
+                if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CALENDAR) != PackageManager.PERMISSION_GRANTED) {
+                    result.put("ok", false).put("error", "READ_CALENDAR permission is required")
+                } else {
+                    val count = contentResolver.query(
+                        CalendarContract.Calendars.CONTENT_URI,
+                        arrayOf(CalendarContract.Calendars._ID),
+                        null,
+                        null,
+                        null
+                    )?.use { it.count } ?: 0
+                    result.put("ok", true).put("calendarCount", count)
                 }
             }
             else -> result.put("ok", false).put("error", "Unsupported command")
