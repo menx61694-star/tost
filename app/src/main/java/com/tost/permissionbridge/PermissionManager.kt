@@ -18,11 +18,7 @@ data class PermissionEntry(
 )
 
 object PermissionManager {
-    /**
-     * Permissions the bridge can legitimately request at runtime on supported APIs.
-     * Restricted/default-handler permissions are intentionally excluded from the bulk
-     * request flow; they require a qualifying app role or a dedicated user flow.
-     */
+    /** Runtime permissions that this bridge can legitimately request from the user. */
     fun runtimeCatalog(): List<PermissionEntry> = buildList {
         add(PermissionEntry("camera", Manifest.permission.CAMERA, "Camera", 1, true, "Camera access"))
         add(PermissionEntry("microphone", Manifest.permission.RECORD_AUDIO, "Microphone", 1, true, "Microphone access"))
@@ -52,6 +48,14 @@ object PermissionManager {
     fun missingPermissions(context: Context): Array<String> = runtimePermissions()
         .filter { ContextCompat.checkSelfPermission(context, it) != PackageManager.PERMISSION_GRANTED }
         .toTypedArray()
+
+    /** Permissions that are intentionally not included in the ordinary runtime request flow. */
+    fun restrictedCatalog(): List<PermissionEntry> = buildList {
+        add(PermissionEntry("read_sms", Manifest.permission.READ_SMS, "Restricted", 1, false, "Read SMS messages — restricted / policy controlled"))
+        add(PermissionEntry("send_sms", Manifest.permission.SEND_SMS, "Restricted", 1, false, "Send SMS messages — restricted / policy controlled"))
+        add(PermissionEntry("read_call_log", Manifest.permission.READ_CALL_LOG, "Restricted", 1, false, "Read call log — restricted / policy controlled"))
+        add(PermissionEntry("write_call_log", Manifest.permission.WRITE_CALL_LOG, "Restricted", 1, false, "Write call log — restricted / policy controlled"))
+    }
 
     /**
      * Permissions that need a Settings-based special-access flow rather than a runtime dialog.
