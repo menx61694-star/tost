@@ -68,9 +68,12 @@ class LocationService : Service() {
         try {
             val provider = manager.getBestProvider(criteria, true)
             if (provider != null) {
+                getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                    .putString(KEY_ROUTE, "[]")
+                    .putBoolean(KEY_ACTIVE, true)
+                    .apply()
                 manager.requestLocationUpdates(provider, 5_000L, 0f, locationListener, mainLooper)
                 manager.getLastKnownLocation(provider)?.let(::publishLocation)
-                getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(KEY_ACTIVE, true).apply()
             }
         } catch (_: SecurityException) {
             stopLocationSession()
@@ -81,8 +84,6 @@ class LocationService : Service() {
         val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
         val oldLat = prefs.getString(KEY_LATITUDE, null)?.toDoubleOrNull()
         val oldLon = prefs.getString(KEY_LONGITUDE, null)?.toDoubleOrNull()
-        val shouldRecord = oldLat == null || oldLon == null ||
-            Location.distanceBetween(oldLat, oldLon, location.latitude, location.longitude, FloatArray(1)).let { false }
 
         val distanceMeters = if (oldLat != null && oldLon != null) {
             val results = FloatArray(1)
@@ -91,7 +92,7 @@ class LocationService : Service() {
         } else Float.MAX_VALUE
 
         val route = try { JSONArray(prefs.getString(KEY_ROUTE, "[]")) } catch (_: Exception) { JSONArray() }
-        if (shouldRecord || distanceMeters >= MIN_ROUTE_DISTANCE_METERS) {
+        if (oldLat == null || oldLon == null || distanceMeters >= MIN_ROUTE_DISTANCE_METERS) {
             route.put(JSONObject().apply {
                 put("latitude", location.latitude)
                 put("longitude", location.longitude)
