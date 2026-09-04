@@ -76,18 +76,14 @@ class LocationService : Service() {
         startAsForeground()
 
         if (!prefs.getBoolean(KEY_ACTIVE, false)) {
-            // A normal user Start creates a fresh session. There is no active session to recover.
             startNewLocationSession()
         } else if (prefs.getBoolean(KEY_PAUSED, false)) {
-            // If Android recreated the service while a session was paused, preserve that state.
             updateNotification("Location session paused")
         } else {
-            // Service was recreated while tracking. Restore listeners without resetting the workout.
             startLocationUpdates()
             startStepCounting(prime = false)
         }
 
-        // Keep an active tracking session recoverable if the service process is reclaimed.
         return START_STICKY
     }
 
@@ -112,6 +108,8 @@ class LocationService : Service() {
             .putLong(KEY_STEP_BASELINE, -1L)
             .putBoolean(KEY_STEP_PRIME, true)
             .putBoolean(KEY_STEPS_AVAILABLE, hasActivityRecognitionPermission() && stepCounterSensor != null)
+            .remove(KEY_ROUTE_LATITUDE)
+            .remove(KEY_ROUTE_LONGITUDE)
             .apply()
         startLocationUpdates()
         startStepCounting(prime = true)
@@ -219,19 +217,22 @@ class LocationService : Service() {
         val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
         if (!prefs.getBoolean(KEY_ACTIVE, false) || prefs.getBoolean(KEY_PAUSED, false)) return
 
-        val oldLat = prefs.getString(KEY_LATITUDE, null)?.toDoubleOrNull()
-        val oldLon = prefs.getString(KEY_LONGITUDE, null)?.toDoubleOrNull()
-        val distanceMeters = if (oldLat != null && oldLon != null) {
+        val validCoordinates = location.latitude.isFinite() && location.longitude.isFinite() &&
+            kotlin.math.abs(location.latitude) <= 90 && kotlin.math.abs(location.longitude) <= 180
+        val routeLatitude = prefs.getString(KEY_ROUTE_LATITUDE, null)?.toDoubleOrNull()
+        val routeLongitude = prefs.getString(KEY_ROUTE_LONGITUDE, null)?.toDoubleOrNull()
+        val distanceFromAcceptedPoint = if (routeLatitude != null && routeLongitude != null && validCoordinates) {
             val results = FloatArray(1)
-            Location.distanceBetween(oldLat, oldLon, location.latitude, location.longitude, results)
+            Location.distanceBetween(routeLatitude, routeLongitude, location.latitude, location.longitude, results)
             results[0]
         } else Float.MAX_VALUE
 
         val route = try { JSONArray(prefs.getString(KEY_ROUTE, "[]")) } catch (_: Exception) { JSONArray() }
-        val validCoordinates = location.latitude.isFinite() && location.longitude.isFinite() &&
-            kotlin.math.abs(location.latitude) <= 90 && kotlin.math.abs(location.longitude) <= 180
-        val acceptPoint = validCoordinates && (oldLat == null || oldLon == null || distanceMeters <= MAX_ROUTE_JUMP_METERS)
-        if (acceptPoint && (oldLat == null || oldLon == null || distanceMeters >= MIN_ROUTE_DISTANCE_METERS)) {
+        val farEnough = routeLatitude == null || routeLongitude == null || distanceFromAcceptedPoint >= MIN_ROUTE_DISTANCE_METERS
+        val acceptPoint = validCoordinates &&
+            (routeLatitude == null || routeLongitude == null || distanceFromAcceptedPoint <= MAX_ROUTE_JUMP_METERS)
+
+        if (acceptPoint && farEnough) {
             route.put(JSONObject().apply {
                 put("latitude", location.latitude)
                 put("longitude", location.longitude)
@@ -239,14 +240,20 @@ class LocationService : Service() {
                 put("accuracyMeters", location.accuracy)
             })
             while (route.length() > MAX_ROUTE_POINTS) route.remove(0)
+            prefs.edit()
+                .putString(KEY_ROUTE_LATITUDE, location.latitude.toString())
+                .putString(KEY_ROUTE_LONGITUDE, location.longitude.toString())
+                .putString(KEY_ROUTE, route.toString())
+                .apply()
         }
 
+        // Keep the latest valid raw fix separately from the route reference point.
+        // A rejected GPS jump therefore cannot poison the next route-distance comparison.
         prefs.edit()
             .putLong(KEY_TIME, location.time)
             .putString(KEY_LATITUDE, location.latitude.toString())
             .putString(KEY_LONGITUDE, location.longitude.toString())
             .putFloat(KEY_ACCURACY, location.accuracy)
-            .putString(KEY_ROUTE, route.toString())
             .apply()
     }
 
@@ -321,8 +328,7 @@ class LocationService : Service() {
         try { locationManager?.removeUpdates(locationListener) } catch (_: SecurityException) { }
         locationManager = null
         stopStepCounting()
-        // Do not clear session state here. An unexpected service/process destruction must not
-        // turn an in-progress workout into a fresh/finished one before Android can recreate it.
+        // Preserve session state so an unexpected service/process destruction can be recovered.
         super.onDestroy()
     }
 
@@ -337,6 +343,8 @@ class LocationService : Service() {
         const val KEY_LONGITUDE = "longitude"
         const val KEY_ACCURACY = "accuracy"
         const val KEY_ROUTE = "route"
+        const val KEY_ROUTE_LATITUDE = "route_latitude"
+        const val KEY_ROUTE_LONGITUDE = "route_longitude"
         const val KEY_SESSION_START = "session_start"
         const val KEY_PAUSED_MS = "paused_ms"
         const val KEY_PAUSE_STARTED = "pause_started"
