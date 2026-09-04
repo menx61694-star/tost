@@ -50,5 +50,10 @@
             android:name=".WebSocketService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+
+        <service
+            android:name=".LocationService"
+            android:exported="false"
+            android:foregroundServiceType="location" />
     </application>
 </manifest>
