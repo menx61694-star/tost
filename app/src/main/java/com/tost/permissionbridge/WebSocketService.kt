@@ -135,7 +135,27 @@ class WebSocketService : Service() {
             put("id", id)
         }
         when (message.optString("command")) {
-            "get_status" -> result.put("ok", true).put("status", "online")
+            "get_status" -> {
+                val locationPrefs = getSharedPreferences(LocationService.PREFS, MODE_PRIVATE)
+                val active = locationPrefs.getBoolean(LocationService.KEY_ACTIVE, false)
+                val paused = locationPrefs.getBoolean(LocationService.KEY_PAUSED, false)
+                result.put("ok", true)
+                    .put("status", "online")
+                    .put("locationSessionActive", active)
+                    .put("locationSessionPaused", paused)
+                    .put("steps", locationPrefs.getLong(LocationService.KEY_STEPS, 0L).coerceAtLeast(0L))
+                    .put("stepsAvailable", locationPrefs.getBoolean(LocationService.KEY_STEPS_AVAILABLE, false))
+                val latitude = locationPrefs.getString(LocationService.KEY_LATITUDE, null)
+                val longitude = locationPrefs.getString(LocationService.KEY_LONGITUDE, null)
+                val time = locationPrefs.getLong(LocationService.KEY_TIME, 0L)
+                if (active && latitude != null && longitude != null && time > 0L) {
+                    result.put("locationTimestamp", time)
+                        .put("latitude", latitude)
+                        .put("longitude", longitude)
+                        .put("accuracyMeters", locationPrefs.getFloat(LocationService.KEY_ACCURACY, -1f))
+                        .put("metrics", getRouteMetrics(locationPrefs))
+                }
+            }
             "get_permissions" -> {
                 val granted = PermissionManager.runtimePermissions().filter {
                     ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
