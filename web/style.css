@@ -1,7 +1,7 @@
 * { box-sizing: border-box; }
 body { margin: 0; font-family: system-ui, sans-serif; background: #0f1115; color: #f5f7fa; }
 main { max-width: 900px; margin: 0 auto; padding: 28px 18px; }
-header, .row, .device { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+header, .row, .device, .storage-device { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .panel { background: #171a21; border: 1px solid #292e39; border-radius: 16px; padding: 18px; }
 input { flex: 1; padding: 12px; border-radius: 10px; border: 1px solid #363c48; background: #0f1115; color: inherit; }
 button { padding: 11px 15px; border: 0; border-radius: 10px; cursor: pointer; }
@@ -34,6 +34,11 @@ small { display: block; opacity: .65; margin-top: 4px; }
 .workout-times { margin-top: 10px; }
 .workout button { flex: 0 0 auto; }
 #message { margin-top: 12px; padding: 10px 12px; border-radius: 10px; background: #11141a; border: 1px solid #292e39; }
+.storage-panel { margin-top: 16px; }
+.storage-panel h2 { margin: 0 0 12px; font-size: 1.05rem; }
+.storage-devices { display: grid; gap: 8px; }
+.storage-device { padding: 11px 12px; border: 1px solid #292e39; border-radius: 10px; background: #14171d; }
+.storage-device button { flex: 0 0 auto; }
 @media (max-width: 760px) {
   .live-status { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .workout-stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -43,4 +48,5 @@ small { display: block; opacity: .65; margin-top: 4px; }
   .history-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .live-status { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .workout { align-items: flex-start; }
+  .storage-device { align-items: flex-start; }
 }
