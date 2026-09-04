@@ -92,7 +92,7 @@ function render() {
       L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
         maxZoom: 19, attribution: "&copy; OpenStreetMap contributors"
       }).addTo(map);
-      maps.set(d.deviceId, { map, marker: null });
+      maps.set(d.deviceId, { map, marker: null, routeLine: null });
     }
   }
 }
@@ -115,11 +115,20 @@ function updateMap(deviceId, result) {
   if (!entry) return;
   const latitude = Number(result.latitude), longitude = Number(result.longitude);
   if (!Number.isFinite(latitude) || !Number.isFinite(longitude) || Math.abs(latitude) > 90 || Math.abs(longitude) > 180) return;
-  const popup = `Accuracy: ${formatAccuracy(result.accuracyMeters)}<br>Updated: ${new Date(result.timestamp).toLocaleString()}`;
+
+  const route = Array.isArray(result.route) ? result.route.map(point => [Number(point.latitude), Number(point.longitude)])
+    .filter(([lat, lon]) => Number.isFinite(lat) && Number.isFinite(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180) : [];
+  const linePoints = route.length >= 2 ? route : [[latitude, longitude]];
+  if (entry.routeLine) entry.routeLine.setLatLngs(linePoints);
+  else if (route.length >= 2) entry.routeLine = L.polyline(route, { weight: 4 }).addTo(entry.map);
+
+  const popup = `Accuracy: ${formatAccuracy(result.accuracyMeters)}<br>Updated: ${new Date(result.timestamp).toLocaleString()}<br>Route points: ${route.length}`;
   if (!entry.marker) entry.marker = L.marker([latitude, longitude]).addTo(entry.map);
   else entry.marker.setLatLng([latitude, longitude]);
   entry.marker.bindPopup(popup);
-  entry.map.setView([latitude, longitude], 16);
+
+  if (route.length >= 2) entry.map.fitBounds(entry.routeLine.getBounds(), { padding: [24, 24], maxZoom: 17 });
+  else entry.map.setView([latitude, longitude], 16);
   setTimeout(() => entry.map.invalidateSize(), 0);
 }
 
@@ -138,7 +147,7 @@ function formatResult(result) {
   if (result.calendarCount !== undefined) return `calendars: ${result.calendarCount}`;
   if (result.latitude !== undefined && result.longitude !== undefined) {
     const ageSeconds = Math.max(0, Math.round((Date.now() - result.timestamp) / 1000));
-    return `location: ${Number(result.latitude).toFixed(6)}, ${Number(result.longitude).toFixed(6)} · accuracy ${formatAccuracy(result.accuracyMeters)} · ${ageSeconds}s old`;
+    return `location: ${Number(result.latitude).toFixed(6)}, ${Number(result.longitude).toFixed(6)} · accuracy ${formatAccuracy(result.accuracyMeters)} · ${ageSeconds}s old · ${Array.isArray(result.route) ? result.route.length : 0} route points`;
   }
   return JSON.stringify(result);
 }
