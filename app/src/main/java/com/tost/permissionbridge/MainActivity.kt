@@ -18,9 +18,23 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 
 class MainActivity : AppCompatActivity() {
+    private var pendingLocationStart = false
+
     private val singlePermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
-    ) { renderPermissions(); updateLocationControls() }
+    ) { granted ->
+        renderPermissions()
+        updateLocationControls()
+
+        if (pendingLocationStart) {
+            pendingLocationStart = false
+            if (granted) {
+                startLocationSession()
+            } else {
+                locationStatus.text = "Permission denied — session not started"
+            }
+        }
+    }
 
     private lateinit var permissionContainer: LinearLayout
     private lateinit var serverUrl: EditText
@@ -140,6 +154,7 @@ class MainActivity : AppCompatActivity() {
         val hasForegroundLocation = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
             ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
         if (!hasForegroundLocation) {
+            pendingLocationStart = true
             singlePermissionLauncher.launch(Manifest.permission.ACCESS_COARSE_LOCATION)
             return
         }
@@ -147,10 +162,12 @@ class MainActivity : AppCompatActivity() {
         if (Build.VERSION.SDK_INT >= 29 &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.ACTIVITY_RECOGNITION) != PackageManager.PERMISSION_GRANTED
         ) {
+            pendingLocationStart = true
             singlePermissionLauncher.launch(Manifest.permission.ACTIVITY_RECOGNITION)
             return
         }
 
+        pendingLocationStart = false
         LocationService.start(this)
         window.decorView.postDelayed(::updateLocationControls, 150)
     }
