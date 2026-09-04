@@ -63,7 +63,7 @@ class LocationService : Service() {
                     return START_NOT_STICKY
                 }
                 resumeLocationSession()
-                return START_NOT_STICKY
+                return START_STICKY
             }
         }
 
@@ -72,9 +72,23 @@ class LocationService : Service() {
             return START_NOT_STICKY
         }
 
+        val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
         startAsForeground()
-        startNewLocationSession()
-        return START_NOT_STICKY
+
+        if (!prefs.getBoolean(KEY_ACTIVE, false)) {
+            // A normal user Start creates a fresh session. There is no active session to recover.
+            startNewLocationSession()
+        } else if (prefs.getBoolean(KEY_PAUSED, false)) {
+            // If Android recreated the service while a session was paused, preserve that state.
+            updateNotification("Location session paused")
+        } else {
+            // Service was recreated while tracking. Restore listeners without resetting the workout.
+            startLocationUpdates()
+            startStepCounting(prime = false)
+        }
+
+        // Keep an active tracking session recoverable if the service process is reclaimed.
+        return START_STICKY
     }
 
     private fun hasLocationPermission(): Boolean =
@@ -110,7 +124,12 @@ class LocationService : Service() {
             startNewLocationSession()
             return
         }
-        if (!prefs.getBoolean(KEY_PAUSED, false)) return
+        if (!prefs.getBoolean(KEY_PAUSED, false)) {
+            startAsForeground()
+            startLocationUpdates()
+            startStepCounting(prime = false)
+            return
+        }
 
         val now = System.currentTimeMillis()
         val pauseStarted = prefs.getLong(KEY_PAUSE_STARTED, 0L)
@@ -128,6 +147,11 @@ class LocationService : Service() {
 
     private fun startLocationUpdates() {
         val manager = getSystemService(LocationManager::class.java) ?: return
+        try {
+            locationManager?.removeUpdates(locationListener)
+        } catch (_: SecurityException) {
+            // Permission may have been revoked while the service was being restored.
+        }
         locationManager = manager
         val fine = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
         val criteria = Criteria().apply {
@@ -297,11 +321,8 @@ class LocationService : Service() {
         try { locationManager?.removeUpdates(locationListener) } catch (_: SecurityException) { }
         locationManager = null
         stopStepCounting()
-        getSharedPreferences(PREFS, MODE_PRIVATE).edit()
-            .putBoolean(KEY_ACTIVE, false)
-            .putBoolean(KEY_PAUSED, false)
-            .putLong(KEY_PAUSE_STARTED, 0L)
-            .apply()
+        // Do not clear session state here. An unexpected service/process destruction must not
+        // turn an in-progress workout into a fresh/finished one before Android can recreate it.
         super.onDestroy()
     }
 
