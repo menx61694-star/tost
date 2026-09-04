@@ -148,14 +148,20 @@ app.post("/api/devices/:id/command", (req, res) => {
     "get_network",
     "get_contacts_count",
     "get_calendar_count",
-    "get_location"
+    "get_location",
+    "get_workout_history",
+    "get_workout"
   ]);
   if (!allowed.has(req.body?.command)) {
     return res.status(400).json({ error: "Command not enabled in this foundation build" });
   }
 
   const id = crypto.randomUUID();
-  sendJson(device.socket, { type: "command", id, command: req.body.command });
+  const payload = { type: "command", id, command: req.body.command };
+  if (req.body.command === "get_workout" && typeof req.body.workoutId === "string") {
+    payload.workoutId = req.body.workoutId;
+  }
+  sendJson(device.socket, payload);
   res.json({ ok: true, id });
 });
 
