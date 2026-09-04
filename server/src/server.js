@@ -147,7 +147,8 @@ app.post("/api/devices/:id/command", (req, res) => {
     "get_battery",
     "get_network",
     "get_contacts_count",
-    "get_calendar_count"
+    "get_calendar_count",
+    "get_location"
   ]);
   if (!allowed.has(req.body?.command)) {
     return res.status(400).json({ error: "Command not enabled in this foundation build" });
