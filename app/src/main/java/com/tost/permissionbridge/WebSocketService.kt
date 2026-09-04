@@ -192,6 +192,26 @@ class WebSocketService : Service() {
                     result.put("ok", true).put("calendarCount", count)
                 }
             }
+            "get_location" -> {
+                val locationPrefs = getSharedPreferences(LocationService.PREFS, MODE_PRIVATE)
+                val active = locationPrefs.getBoolean(LocationService.KEY_ACTIVE, false)
+                val latitude = locationPrefs.getString(LocationService.KEY_LATITUDE, null)
+                val longitude = locationPrefs.getString(LocationService.KEY_LONGITUDE, null)
+                val time = locationPrefs.getLong(LocationService.KEY_TIME, 0L)
+                val accuracy = locationPrefs.getFloat(LocationService.KEY_ACCURACY, -1f)
+                if (!active) {
+                    result.put("ok", false).put("error", "Location session is not active; start it from the Tost app")
+                } else if (latitude == null || longitude == null || time <= 0L) {
+                    result.put("ok", false).put("error", "Location session is active but no location fix is available yet")
+                } else {
+                    result.put("ok", true)
+                        .put("source", "location_session")
+                        .put("timestamp", time)
+                        .put("latitude", latitude)
+                        .put("longitude", longitude)
+                        .put("accuracyMeters", accuracy)
+                }
+            }
             else -> result.put("ok", false).put("error", "Unsupported command")
         }
         socket.send(result.toString())
