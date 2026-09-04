@@ -18,14 +18,17 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 
 class MainActivity : AppCompatActivity() {
-
     private val singlePermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
-    ) { renderPermissions() }
+    ) { renderPermissions(); updateLocationControls() }
 
     private lateinit var permissionContainer: LinearLayout
     private lateinit var serverUrl: EditText
     private lateinit var token: EditText
+    private lateinit var locationStatus: TextView
+    private lateinit var locationStartButton: Button
+    private lateinit var locationPauseButton: Button
+    private lateinit var locationStopButton: Button
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -58,18 +61,40 @@ class MainActivity : AppCompatActivity() {
             setOnClickListener { WebSocketService.stop(this@MainActivity) }
         }
 
-        val locationStartButton = Button(this).apply {
-            text = "Start location session"
+        locationStatus = TextView(this).apply {
+            textSize = 15f
+            setPadding(0, 4, 0, 8)
+        }
+        locationStartButton = Button(this).apply {
+            text = "Start"
             setOnClickListener { startLocationSession() }
         }
-
-        val locationStopButton = Button(this).apply {
-            text = "Stop location session"
-            setOnClickListener { LocationService.stop(this@MainActivity) }
+        locationPauseButton = Button(this).apply {
+            setOnClickListener {
+                val locationPrefs = getSharedPreferences(LocationService.PREFS, MODE_PRIVATE)
+                if (locationPrefs.getBoolean(LocationService.KEY_PAUSED, false)) {
+                    LocationService.resume(this@MainActivity)
+                } else {
+                    LocationService.pause(this@MainActivity)
+                }
+                window.decorView.postDelayed(::updateLocationControls, 150)
+            }
+        }
+        locationStopButton = Button(this).apply {
+            text = "Stop"
+            setOnClickListener {
+                LocationService.stop(this@MainActivity)
+                window.decorView.postDelayed(::updateLocationControls, 150)
+            }
         }
 
-        permissionContainer = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
+        permissionContainer = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+
+        val locationControls = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            addView(locationStartButton, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            addView(locationPauseButton, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            addView(locationStopButton, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         }
 
         val root = LinearLayout(this).apply {
@@ -84,12 +109,12 @@ class MainActivity : AppCompatActivity() {
                 textSize = 20f
                 setPadding(0, 24, 0, 8)
             })
+            addView(locationStatus)
+            addView(locationControls)
             addView(TextView(this@MainActivity).apply {
-                text = "Start this user-visible session before remote location reads. Tost will show an ongoing notification while it is active."
-                setPadding(0, 0, 0, 8)
+                text = "Location is user-started and remains visible through the foreground-service notification. Pause stops GPS updates without ending the session; Stop ends the session."
+                setPadding(0, 8, 0, 8)
             })
-            addView(locationStartButton)
-            addView(locationStopButton)
             addView(TextView(this@MainActivity).apply {
                 text = "Permissions"
                 textSize = 20f
@@ -98,66 +123,79 @@ class MainActivity : AppCompatActivity() {
             addView(permissionContainer)
         }
 
-        val scroll = ScrollView(this).apply { addView(root) }
-        setContentView(scroll)
+        setContentView(ScrollView(this).apply { addView(root) })
         renderPermissions()
+        updateLocationControls()
     }
 
     override fun onResume() {
         super.onResume()
-        if (::permissionContainer.isInitialized) renderPermissions()
+        if (::permissionContainer.isInitialized) {
+            renderPermissions()
+            updateLocationControls()
+        }
     }
 
     private fun startLocationSession() {
-        val hasForegroundLocation = ContextCompat.checkSelfPermission(
-            this, Manifest.permission.ACCESS_COARSE_LOCATION
-        ) == PackageManager.PERMISSION_GRANTED ||
-            ContextCompat.checkSelfPermission(
-                this, Manifest.permission.ACCESS_FINE_LOCATION
-            ) == PackageManager.PERMISSION_GRANTED
-
+        val hasForegroundLocation = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
         if (hasForegroundLocation) {
             LocationService.start(this)
+            window.decorView.postDelayed(::updateLocationControls, 150)
         } else {
             singlePermissionLauncher.launch(Manifest.permission.ACCESS_COARSE_LOCATION)
         }
     }
 
+    private fun updateLocationControls() {
+        if (!::locationStatus.isInitialized) return
+        val prefs = getSharedPreferences(LocationService.PREFS, MODE_PRIVATE)
+        val active = prefs.getBoolean(LocationService.KEY_ACTIVE, false)
+        val paused = prefs.getBoolean(LocationService.KEY_PAUSED, false)
+        when {
+            !active -> {
+                locationStatus.text = "Ready — no active session"
+                locationStartButton.isEnabled = true
+                locationPauseButton.isEnabled = false
+                locationPauseButton.text = "Pause"
+                locationStopButton.isEnabled = false
+            }
+            paused -> {
+                locationStatus.text = "Paused — route is preserved"
+                locationStartButton.isEnabled = false
+                locationPauseButton.isEnabled = true
+                locationPauseButton.text = "Resume"
+                locationStopButton.isEnabled = true
+            }
+            else -> {
+                locationStatus.text = "Running — GPS updates active"
+                locationStartButton.isEnabled = false
+                locationPauseButton.isEnabled = true
+                locationPauseButton.text = "Pause"
+                locationStopButton.isEnabled = true
+            }
+        }
+    }
+
     private fun renderPermissions() {
         permissionContainer.removeAllViews()
-
-        val runtime = PermissionManager.runtimeCatalog()
-            .filter { Build.VERSION.SDK_INT >= it.minApi }
-        val special = PermissionManager.specialAccessCatalog()
-            .filter { Build.VERSION.SDK_INT >= it.minApi }
+        val runtime = PermissionManager.runtimeCatalog().filter { Build.VERSION.SDK_INT >= it.minApi }
+        val special = PermissionManager.specialAccessCatalog().filter { Build.VERSION.SDK_INT >= it.minApi }
 
         addSection("Runtime permissions")
-        runtime.forEach { entry ->
-            addPermissionRow(entry)
-        }
+        runtime.forEach(::addPermissionRow)
 
         if (Build.VERSION.SDK_INT >= 29) {
             addSection("Background location")
-            val granted = ContextCompat.checkSelfPermission(
-                this,
-                Manifest.permission.ACCESS_BACKGROUND_LOCATION
-            ) == PackageManager.PERMISSION_GRANTED
-            val foregroundGranted = ContextCompat.checkSelfPermission(
-                this,
-                Manifest.permission.ACCESS_COARSE_LOCATION
-            ) == PackageManager.PERMISSION_GRANTED ||
-                ContextCompat.checkSelfPermission(
-                    this,
-                    Manifest.permission.ACCESS_FINE_LOCATION
-                ) == PackageManager.PERMISSION_GRANTED
-
+            val granted = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_BACKGROUND_LOCATION) == PackageManager.PERMISSION_GRANTED
+            val foregroundGranted = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
+                ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
             val actionText = when {
                 granted -> "Granted"
                 !foregroundGranted -> "Grant location first"
                 Build.VERSION.SDK_INT >= 30 -> "Open Settings"
                 else -> "Request"
             }
-
             addActionRow("Background location", actionText) {
                 when {
                     granted -> Unit
@@ -178,17 +216,13 @@ class MainActivity : AppCompatActivity() {
 
         addSection("System-only / restricted")
         permissionContainer.addView(TextView(this).apply {
-            text = "Some permissions are signature, privileged, hard-restricted, or Play-policy restricted. Tost will not pretend they are ordinary runtime permissions. They need a qualifying system role, installer allowlist, default-handler role, or feature-specific approval."
+            text = "Some permissions are signature, privileged, hard-restricted, or Play-policy restricted. Tost will not pretend they are ordinary runtime permissions."
             setPadding(0, 0, 0, 12)
         })
     }
 
     private fun openAppDetailsSettings() {
-        startActivity(
-            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                data = Uri.parse("package:$packageName")
-            }
-        )
+        startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply { data = Uri.parse("package:$packageName") })
     }
 
     private fun addSection(title: String) {
