@@ -226,8 +226,6 @@ class WebSocketService : Service() {
     private fun getRouteMetrics(prefs: android.content.SharedPreferences): JSONObject {
         val route = getRoute(prefs)
         var distanceMeters = 0.0
-        var firstTimestamp = 0L
-        var lastTimestamp = 0L
         var previousLat = 0.0
         var previousLon = 0.0
         var hasPrevious = false
@@ -236,10 +234,7 @@ class WebSocketService : Service() {
             val point = route.optJSONObject(index) ?: continue
             val lat = point.optDouble("latitude", Double.NaN)
             val lon = point.optDouble("longitude", Double.NaN)
-            val timestamp = point.optLong("timestamp", 0L)
-            if (!lat.isFinite() || !lon.isFinite() || timestamp <= 0L || kotlin.math.abs(lat) > 90 || kotlin.math.abs(lon) > 180) continue
-            if (firstTimestamp == 0L) firstTimestamp = timestamp
-            lastTimestamp = maxOf(lastTimestamp, timestamp)
+            if (!lat.isFinite() || !lon.isFinite() || kotlin.math.abs(lat) > 90 || kotlin.math.abs(lon) > 180) continue
             if (hasPrevious) {
                 val results = FloatArray(1)
                 android.location.Location.distanceBetween(
@@ -258,11 +253,20 @@ class WebSocketService : Service() {
             hasPrevious = true
         }
 
-        val durationSeconds = if (firstTimestamp > 0L && lastTimestamp >= firstTimestamp) {
-            (lastTimestamp - firstTimestamp) / 1000L
+        val sessionStart = prefs.getLong(LocationService.KEY_SESSION_START, 0L)
+        val pausedMs = prefs.getLong(LocationService.KEY_PAUSED_MS, 0L).coerceAtLeast(0L)
+        val currentlyPaused = prefs.getBoolean(LocationService.KEY_PAUSED, false)
+        val pauseStarted = prefs.getLong(LocationService.KEY_PAUSE_STARTED, 0L)
+        val currentPauseMs = if (currentlyPaused && pauseStarted > 0L) {
+            (System.currentTimeMillis() - pauseStarted).coerceAtLeast(0L)
+        } else 0L
+        val durationSeconds = if (sessionStart > 0L) {
+            ((System.currentTimeMillis() - sessionStart - pausedMs - currentPauseMs).coerceAtLeast(0L) / 1000L)
         } else 0L
         val averageSpeedMps = if (durationSeconds > 0) distanceMeters / durationSeconds else 0.0
         val paceSecondsPerKm = if (averageSpeedMps > 0.1) 1000.0 / averageSpeedMps else 0.0
+        val steps = prefs.getLong(LocationService.KEY_STEPS, 0L).coerceAtLeast(0L)
+        val stepsAvailable = prefs.getBoolean(LocationService.KEY_STEPS_AVAILABLE, false)
 
         return JSONObject()
             .put("distanceMeters", distanceMeters)
@@ -270,6 +274,8 @@ class WebSocketService : Service() {
             .put("averageSpeedMps", averageSpeedMps)
             .put("paceSecondsPerKm", paceSecondsPerKm)
             .put("routePoints", route.length())
+            .put("steps", steps)
+            .put("stepsAvailable", stepsAvailable)
     }
 
     private fun scheduleReconnect() {
