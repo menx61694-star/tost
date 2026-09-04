@@ -102,7 +102,9 @@ class WebSocketService : Service() {
                 }
 
                 override fun onMessage(socket: WebSocket, text: String) = handleMessage(socket, text)
-                override fun onClosing(socket: WebSocket, code: Int, reason: String) = socket.close(code, reason)
+                override fun onClosing(socket: WebSocket, code: Int, reason: String) {
+                    socket.close(code, reason)
+                }
                 override fun onClosed(socket: WebSocket, code: Int, reason: String) {
                     if (webSocket === socket) webSocket = null
                     if (!stopping) scheduleReconnect()
