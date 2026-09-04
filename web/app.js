@@ -5,6 +5,7 @@ let dashboardSession = "";
 let socket = null;
 let devices = [];
 const maps = new Map();
+const liveStates = new Map();
 
 $("connect").onclick = async () => {
   const token = $("token").value.trim();
@@ -45,7 +46,14 @@ function connectLive() {
       render();
     } else if (message.type === "command_result") {
       const result = message.result || {};
-      if (result.ok && result.latitude !== undefined && result.longitude !== undefined) updateMap(message.deviceId, result);
+      if (result.ok && result.locationSessionActive !== undefined) {
+        liveStates.set(message.deviceId, result);
+        renderLiveStatus(message.deviceId, result);
+      }
+      if (result.ok && result.latitude !== undefined && result.longitude !== undefined) {
+        if (result.timestamp === undefined) result.timestamp = result.locationTimestamp;
+        updateMap(message.deviceId, result);
+      }
       if (result.ok && Array.isArray(result.workouts)) renderHistory(message.deviceId, result.workouts);
       if (result.ok && result.workout) showWorkout(message.deviceId, result.workout);
       showMessage(`Command result: ${result.ok ? formatResult(result) : (result.error || "Command failed")}`);
@@ -71,6 +79,10 @@ function render() {
     state.textContent = `${d.status} · last seen ${new Date(d.lastSeen).toLocaleTimeString()}`;
     details.append(name, state);
 
+    const liveStatus = document.createElement("div");
+    liveStatus.className = "live-status";
+    liveStatus.id = `live-status-${d.deviceId}`;
+
     const actions = document.createElement("div");
     for (const [label, commandName] of [
       ["Status", "get_status"], ["Device info", "get_device_info"], ["Battery", "get_battery"],
@@ -89,7 +101,7 @@ function render() {
     const historyHost = document.createElement("div");
     historyHost.className = "history-host";
     historyHost.id = `history-${d.deviceId}`;
-    card.append(details, actions, mapHost, historyHost);
+    card.append(details, liveStatus, actions, mapHost, historyHost);
     root.appendChild(card);
 
     if (typeof L !== "undefined") {
@@ -99,6 +111,45 @@ function render() {
       }).addTo(map);
       maps.set(d.deviceId, { map, marker: null, routeLine: null });
     }
+
+    const previousState = liveStates.get(d.deviceId);
+    if (previousState) renderLiveStatus(d.deviceId, previousState);
+  }
+}
+
+function renderLiveStatus(deviceId, result) {
+  const host = $(`live-status-${deviceId}`);
+  if (!host) return;
+  const metrics = result.metrics || {};
+  const active = result.locationSessionActive === true;
+  const paused = result.locationSessionPaused === true;
+  const stepsAvailable = result.stepsAvailable !== false && metrics.stepsAvailable !== false;
+  const stateText = !active ? "Location session: stopped" : paused ? "Location session: paused" : "Location session: running";
+  const items = [
+    ["State", stateText],
+    ["Steps", stepsAvailable ? formatSteps(result.steps ?? metrics.steps) : "Unavailable"],
+    ["Distance", formatDistance(metrics.distanceMeters)],
+    ["Duration", formatDuration(metrics.durationSeconds)],
+    ["Avg speed", formatSpeed(metrics.averageSpeedMps)],
+    ["Pace", formatPace(metrics.paceSecondsPerKm)]
+  ];
+  host.innerHTML = "";
+  for (const [label, value] of items) {
+    const item = document.createElement("div");
+    item.className = "live-stat";
+    const valueNode = document.createElement("strong");
+    valueNode.textContent = value;
+    const labelNode = document.createElement("small");
+    labelNode.textContent = label;
+    item.append(valueNode, labelNode);
+    host.appendChild(item);
+  }
+  if (result.latitude !== undefined && result.longitude !== undefined) {
+    const location = document.createElement("small");
+    location.className = "live-location";
+    const age = result.locationTimestamp ? Math.max(0, Math.round((Date.now() - result.locationTimestamp) / 1000)) : null;
+    location.textContent = `GPS ${Number(result.latitude).toFixed(6)}, ${Number(result.longitude).toFixed(6)} · accuracy ${formatAccuracy(result.accuracyMeters)}${age === null ? "" : ` · ${age}s old`}`;
+    host.appendChild(location);
   }
 }
 
@@ -129,7 +180,9 @@ function updateMap(deviceId, result) {
 
   const metrics = result.metrics || {};
   const stepsText = metrics.stepsAvailable === false ? "Steps: unavailable" : `Steps: ${formatSteps(metrics.steps)}`;
-  const popup = `Accuracy: ${formatAccuracy(result.accuracyMeters)}<br>Updated: ${new Date(result.timestamp).toLocaleString()}<br>Distance: ${formatDistance(metrics.distanceMeters)} · ${formatDuration(metrics.durationSeconds)}<br>Avg speed: ${formatSpeed(metrics.averageSpeedMps)} · Pace: ${formatPace(metrics.paceSecondsPerKm)}<br>${stepsText}<br>Route points: ${route.length}`;
+  const timestamp = Number(result.timestamp);
+  const updatedText = Number.isFinite(timestamp) && timestamp > 0 ? new Date(timestamp).toLocaleString() : "unknown";
+  const popup = `Accuracy: ${formatAccuracy(result.accuracyMeters)}<br>Updated: ${updatedText}<br>Distance: ${formatDistance(metrics.distanceMeters)} · ${formatDuration(metrics.durationSeconds)}<br>Avg speed: ${formatSpeed(metrics.averageSpeedMps)} · Pace: ${formatPace(metrics.paceSecondsPerKm)}<br>${stepsText}<br>Route points: ${route.length}`;
   if (!entry.marker) entry.marker = L.marker([latitude, longitude]).addTo(entry.map);
   else entry.marker.setLatLng([latitude, longitude]);
   entry.marker.bindPopup(popup);
@@ -291,6 +344,12 @@ function formatSteps(value) {
 }
 
 function formatResult(result) {
+  if (result.locationSessionActive !== undefined) {
+    const state = result.locationSessionPaused ? "location paused" : result.locationSessionActive ? "location running" : "location stopped";
+    const metrics = result.metrics || {};
+    const stepsText = result.stepsAvailable === false || metrics.stepsAvailable === false ? "steps unavailable" : `${formatSteps(result.steps ?? metrics.steps)} steps`;
+    return `${state} · ${formatDistance(metrics.distanceMeters)} · ${formatDuration(metrics.durationSeconds)} · ${stepsText}`;
+  }
   if (result.status) return `status: ${result.status}`;
   if (Array.isArray(result.grantedPermissions)) return `${result.grantedPermissions.length} runtime permissions granted`;
   if (result.percent !== undefined) return `battery: ${result.percent}% · ${result.charging ? "charging" : "not charging"}`;
@@ -301,7 +360,8 @@ function formatResult(result) {
   if (Array.isArray(result.workouts)) return `${result.workouts.length} completed workouts`;
   if (result.workout) return "Workout route loaded";
   if (result.latitude !== undefined && result.longitude !== undefined) {
-    const ageSeconds = Math.max(0, Math.round((Date.now() - result.timestamp) / 1000));
+    const timestamp = Number(result.timestamp);
+    const ageSeconds = Number.isFinite(timestamp) && timestamp > 0 ? Math.max(0, Math.round((Date.now() - timestamp) / 1000)) : 0;
     const metrics = result.metrics || {};
     const stepsText = metrics.stepsAvailable === false ? "steps unavailable" : `${formatSteps(metrics.steps)} steps`;
     return `location: ${Number(result.latitude).toFixed(6)}, ${Number(result.longitude).toFixed(6)} · ${formatDistance(metrics.distanceMeters)} · ${formatDuration(metrics.durationSeconds)} · ${formatSpeed(metrics.averageSpeedMps)} · ${formatPace(metrics.paceSecondsPerKm)} · ${stepsText} · accuracy ${formatAccuracy(result.accuracyMeters)} · ${ageSeconds}s old · ${Array.isArray(result.route) ? result.route.length : 0} route points`;
