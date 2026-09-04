@@ -12,9 +12,18 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 .device > div:nth-child(2) { display: flex; flex-wrap: wrap; gap: 8px; }
 small { display: block; opacity: .65; margin-top: 4px; }
 .map-host { width: 100%; height: 280px; margin-top: 10px; border-radius: 12px; overflow: hidden; background: #222; }
-.history-host { width: 100%; margin-top: 12px; display: grid; gap: 8px; }
+.history-host { width: 100%; margin-top: 14px; display: grid; gap: 8px; }
 .history-host h3 { margin: 4px 0 0; font-size: 1rem; }
-.workout, .workout-detail { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 1px solid #292e39; border-radius: 10px; }
-.workout-detail { justify-content: flex-start; }
+.history-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.history-stat { padding: 10px 12px; border: 1px solid #292e39; border-radius: 10px; background: #14171d; }
+.history-stat strong { display: block; font-size: 1.05rem; }
+.history-stat small { margin-top: 2px; }
+.workout, .workout-detail { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 12px; border: 1px solid #292e39; border-radius: 10px; background: #14171d; }
+.workout-detail { justify-content: flex-start; font-weight: 600; }
 .workout button { flex: 0 0 auto; }
 #message { margin-top: 12px; padding: 10px 12px; border-radius: 10px; background: #11141a; border: 1px solid #292e39; }
+@media (max-width: 620px) {
+  main { padding: 18px 12px; }
+  .history-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .workout { align-items: flex-start; }
+}
