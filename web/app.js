@@ -1,6 +1,7 @@
 const $ = id => document.getElementById(id);
 
 let authToken = "";
+let dashboardSession = "";
 let socket = null;
 let devices = [];
 
@@ -15,6 +16,15 @@ $("connect").onclick = async () => {
     });
     if (!r.ok) throw new Error("Unauthorized");
     devices = await r.json();
+
+    const sessionResponse = await fetch("/api/dashboard-session", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${authToken}` }
+    });
+    if (!sessionResponse.ok) throw new Error("Could not create live dashboard session");
+    const session = await sessionResponse.json();
+    dashboardSession = session.token;
+
     $("server").textContent = "Connected";
     render();
     connectLive();
@@ -27,7 +37,7 @@ $("connect").onclick = async () => {
 function connectLive() {
   if (socket) socket.close();
   const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-  socket = new WebSocket(`${protocol}//${location.host}/ws?token=${encodeURIComponent(authToken)}`);
+  socket = new WebSocket(`${protocol}//${location.host}/ws?session=${encodeURIComponent(dashboardSession)}`);
 
   socket.onopen = () => {
     socket.send(JSON.stringify({ type: "dashboard_hello" }));
