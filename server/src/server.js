@@ -140,7 +140,13 @@ app.post("/api/devices/:id/command", (req, res) => {
     return res.status(404).json({ error: "Device offline" });
   }
 
-  const allowed = new Set(["get_status", "get_permissions"]);
+  const allowed = new Set([
+    "get_status",
+    "get_permissions",
+    "get_device_info",
+    "get_battery",
+    "get_network"
+  ]);
   if (!allowed.has(req.body?.command)) {
     return res.status(400).json({ error: "Command not enabled in this foundation build" });
   }
