@@ -84,6 +84,10 @@ class WebSocketService : Service() {
         try {
             webSocket = client.newWebSocket(request, object : WebSocketListener() {
                 override fun onOpen(socket: WebSocket, response: Response) {
+                    if (webSocket !== socket) {
+                        socket.close(4002, "Stale connection")
+                        return
+                    }
                     reconnectAttempt = 0
                     handler.removeCallbacks(reconnectRunnable)
                     updateNotification("Connected")
@@ -106,11 +110,13 @@ class WebSocketService : Service() {
                     socket.close(code, reason)
                 }
                 override fun onClosed(socket: WebSocket, code: Int, reason: String) {
-                    if (webSocket === socket) webSocket = null
+                    if (webSocket !== socket) return
+                    webSocket = null
                     if (!stopping) scheduleReconnect()
                 }
                 override fun onFailure(socket: WebSocket, t: Throwable, response: Response?) {
-                    if (webSocket === socket) webSocket = null
+                    if (webSocket !== socket) return
+                    webSocket = null
                     updateNotification("Connection lost; reconnecting")
                     if (!stopping) scheduleReconnect()
                 }
@@ -122,6 +128,7 @@ class WebSocketService : Service() {
     }
 
     private fun handleMessage(socket: WebSocket, text: String) {
+        if (webSocket !== socket) return
         val message = try { JSONObject(text) } catch (_: Exception) { return }
         if (message.optString("type") != "command") return
         val id = message.optString("id")
