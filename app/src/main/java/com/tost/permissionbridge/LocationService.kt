@@ -179,8 +179,6 @@ class LocationService : Service() {
         val currentSteps = prefs.getLong(KEY_STEPS, 0L).coerceAtLeast(0L)
         val priming = prefs.getBoolean(KEY_STEP_PRIME, false)
         if (priming || prefs.getLong(KEY_STEP_BASELINE, -1L) < 0L) {
-            // On start/resume, discard steps accumulated before the active workout.
-            // The existing session total is retained when resuming after a pause.
             prefs.edit()
                 .putLong(KEY_STEP_BASELINE, current - currentSteps)
                 .putBoolean(KEY_STEP_PRIME, false)
@@ -234,8 +232,6 @@ class LocationService : Service() {
             // Permission may have been revoked while the session was running.
         }
         locationManager = null
-        // Do not count steps taken during the pause. The next sensor event on resume
-        // re-primes the cumulative counter while preserving the current session total.
         prefs.edit()
             .putBoolean(KEY_PAUSED, true)
             .putLong(KEY_PAUSE_STARTED, System.currentTimeMillis())
@@ -245,6 +241,11 @@ class LocationService : Service() {
     }
 
     private fun stopLocationSession() {
+        val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+        if (prefs.getBoolean(KEY_ACTIVE, false)) {
+            // Persist the completed workout before clearing the live-session state.
+            WorkoutHistory.saveCompleted(this, prefs)
+        }
         try {
             locationManager?.removeUpdates(locationListener)
         } catch (_: SecurityException) {
@@ -252,7 +253,7 @@ class LocationService : Service() {
         }
         locationManager = null
         stopStepCounting()
-        getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+        prefs.edit()
             .putBoolean(KEY_ACTIVE, false)
             .putBoolean(KEY_PAUSED, false)
             .putLong(KEY_PAUSE_STARTED, 0L)
