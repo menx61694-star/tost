@@ -210,12 +210,16 @@ class WebSocketService : Service() {
                         .put("latitude", latitude)
                         .put("longitude", longitude)
                         .put("accuracyMeters", accuracy)
+                        .put("route", getRoute(locationPrefs))
                 }
             }
             else -> result.put("ok", false).put("error", "Unsupported command")
         }
         socket.send(result.toString())
     }
+
+    private fun getRoute(prefs: android.content.SharedPreferences): org.json.JSONArray =
+        try { org.json.JSONArray(prefs.getString(LocationService.KEY_ROUTE, "[]")) } catch (_: Exception) { org.json.JSONArray() }
 
     private fun scheduleReconnect() {
         handler.removeCallbacks(reconnectRunnable)
