@@ -82,43 +82,48 @@ class WebSocketService : Service() {
             return
         }
 
-        webSocket = client.newWebSocket(request, object : WebSocketListener() {
-            override fun onOpen(socket: WebSocket, response: Response) {
-                reconnectAttempt = 0
-                handler.removeCallbacks(reconnectRunnable)
-                updateNotification("Connected")
-                val deviceId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID)
-                    ?: "unknown-device"
-                val info = JSONObject().apply {
-                    put("manufacturer", Build.MANUFACTURER)
-                    put("model", Build.MODEL)
-                    put("androidApi", Build.VERSION.SDK_INT)
-                    put("appVersion", BuildConfig.VERSION_NAME)
+        try {
+            webSocket = client.newWebSocket(request, object : WebSocketListener() {
+                override fun onOpen(socket: WebSocket, response: Response) {
+                    reconnectAttempt = 0
+                    handler.removeCallbacks(reconnectRunnable)
+                    updateNotification("Connected")
+                    val deviceId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID)
+                        ?: "unknown-device"
+                    val info = JSONObject().apply {
+                        put("manufacturer", Build.MANUFACTURER)
+                        put("model", Build.MODEL)
+                        put("androidApi", Build.VERSION.SDK_INT)
+                        put("appVersion", BuildConfig.VERSION_NAME)
+                    }
+                    socket.send(JSONObject().apply {
+                        put("type", "register")
+                        put("deviceId", deviceId)
+                        put("info", info)
+                    }.toString())
                 }
-                socket.send(JSONObject().apply {
-                    put("type", "register")
-                    put("deviceId", deviceId)
-                    put("info", info)
-                }.toString())
-            }
 
-            override fun onMessage(socket: WebSocket, text: String) = handleMessage(socket, text)
+                override fun onMessage(socket: WebSocket, text: String) = handleMessage(socket, text)
 
-            override fun onClosing(socket: WebSocket, code: Int, reason: String) {
-                socket.close(code, reason)
-            }
+                override fun onClosing(socket: WebSocket, code: Int, reason: String) {
+                    socket.close(code, reason)
+                }
 
-            override fun onClosed(socket: WebSocket, code: Int, reason: String) {
-                if (webSocket === socket) webSocket = null
-                if (!stopping) scheduleReconnect()
-            }
+                override fun onClosed(socket: WebSocket, code: Int, reason: String) {
+                    if (webSocket === socket) webSocket = null
+                    if (!stopping) scheduleReconnect()
+                }
 
-            override fun onFailure(socket: WebSocket, t: Throwable, response: Response?) {
-                if (webSocket === socket) webSocket = null
-                updateNotification("Connection lost; reconnecting")
-                if (!stopping) scheduleReconnect()
-            }
-        })
+                override fun onFailure(socket: WebSocket, t: Throwable, response: Response?) {
+                    if (webSocket === socket) webSocket = null
+                    updateNotification("Connection lost; reconnecting")
+                    if (!stopping) scheduleReconnect()
+                }
+            })
+        } catch (_: IllegalArgumentException) {
+            webSocket = null
+            updateNotification("Invalid server URL")
+        }
     }
 
     private fun handleMessage(socket: WebSocket, text: String) {
@@ -330,6 +335,8 @@ class WebSocketService : Service() {
     }
 
     override fun onTimeout(startId: Int, fgsType: Int) {
+        stopping = true
+        handler.removeCallbacks(reconnectRunnable)
         webSocket?.close(1000, "Foreground service timeout")
         webSocket = null
         stopForeground(STOP_FOREGROUND_REMOVE)
