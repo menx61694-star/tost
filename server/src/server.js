@@ -153,6 +153,7 @@ app.post("/api/devices/:id/command", (req, res) => {
     "get_device_info",
     "get_battery",
     "get_network",
+    "get_storage",
     "get_contacts_count",
     "get_calendar_count",
     "get_location",
