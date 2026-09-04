@@ -53,7 +53,7 @@ function connectLive() {
     } else if (message.type === "command_result") {
       const result = message.result || {};
       const detail = result.ok
-        ? JSON.stringify(result.status ?? result.grantedPermissions ?? result)
+        ? formatResult(result)
         : (result.error || "Command failed");
       console.info(`Device ${message.deviceId} result ${message.id}:`, result);
       showMessage(`Command result: ${detail}`);
@@ -79,23 +79,26 @@ function render() {
 
     const details = document.createElement("div");
     const name = document.createElement("strong");
-    name.textContent = d.deviceId;
+    name.textContent = d.info?.model ? `${d.info.manufacturer || ""} ${d.info.model}`.trim() : d.deviceId;
     const state = document.createElement("small");
     state.textContent = `${d.status} · last seen ${new Date(d.lastSeen).toLocaleTimeString()}`;
     details.append(name, state);
 
     const actions = document.createElement("div");
-    const status = document.createElement("button");
-    status.textContent = "Get status";
-    status.disabled = d.status !== "online";
-    status.onclick = () => command(d.deviceId, "get_status");
+    for (const [label, commandName] of [
+      ["Status", "get_status"],
+      ["Device info", "get_device_info"],
+      ["Battery", "get_battery"],
+      ["Network", "get_network"],
+      ["Permissions", "get_permissions"]
+    ]) {
+      const button = document.createElement("button");
+      button.textContent = label;
+      button.disabled = d.status !== "online";
+      button.onclick = () => command(d.deviceId, commandName);
+      actions.appendChild(button);
+    }
 
-    const permissions = document.createElement("button");
-    permissions.textContent = "Get permissions";
-    permissions.disabled = d.status !== "online";
-    permissions.onclick = () => command(d.deviceId, "get_permissions");
-
-    actions.append(status, permissions);
     card.append(details, actions);
     root.appendChild(card);
   }
@@ -117,6 +120,15 @@ async function command(deviceId, commandName) {
   } catch (e) {
     showMessage(e.message);
   }
+}
+
+function formatResult(result) {
+  if (result.status) return `status: ${result.status}`;
+  if (Array.isArray(result.grantedPermissions)) return `${result.grantedPermissions.length} runtime permissions granted`;
+  if (result.percent !== undefined) return `battery: ${result.percent}% · ${result.charging ? "charging" : "not charging"}`;
+  if (result.transport) return `network: ${result.transport} · ${result.connected ? "connected" : "offline"}`;
+  if (result.model) return `device: ${result.manufacturer || ""} ${result.model} · Android API ${result.androidApi}`.trim();
+  return JSON.stringify(result);
 }
 
 function showMessage(message) {
