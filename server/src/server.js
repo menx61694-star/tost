@@ -5,6 +5,7 @@ import crypto from "node:crypto";
 
 const PORT = Number(process.env.PORT || 8080);
 const DEVICE_TOKEN = process.env.DEVICE_TOKEN || "change-me";
+const DASHBOARD_SESSION_TTL_MS = 60 * 60 * 1000;
 
 const app = express();
 app.use(express.json({ limit: "32kb" }));
@@ -14,9 +15,27 @@ const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: "/ws" });
 const devices = new Map();
 const dashboards = new Set();
+const dashboardSessions = new Map();
 
 function authorized(req) {
   return (req.headers.authorization || "") === `Bearer ${DEVICE_TOKEN}`;
+}
+
+function createDashboardSession() {
+  const token = crypto.randomBytes(32).toString("base64url");
+  dashboardSessions.set(token, Date.now() + DASHBOARD_SESSION_TTL_MS);
+  return token;
+}
+
+function validDashboardSession(token) {
+  if (!token) return false;
+  const expiresAt = dashboardSessions.get(token);
+  if (!expiresAt) return false;
+  if (expiresAt <= Date.now()) {
+    dashboardSessions.delete(token);
+    return false;
+  }
+  return true;
 }
 
 function sendJson(socket, payload) {
@@ -41,7 +60,11 @@ function publicDevices() {
 
 wss.on("connection", (socket, req) => {
   const auth = req.headers.authorization || "";
-  if (auth !== `Bearer ${DEVICE_TOKEN}`) {
+  const session = new URL(req.url || "/", "http://localhost").searchParams.get("session");
+  const deviceAuthorized = auth === `Bearer ${DEVICE_TOKEN}`;
+  const dashboardAuthorized = deviceAuthorized || validDashboardSession(session);
+
+  if (!dashboardAuthorized) {
     socket.close(1008, "Unauthorized");
     return;
   }
@@ -54,6 +77,7 @@ wss.on("connection", (socket, req) => {
     try { message = JSON.parse(raw.toString()); } catch { return; }
 
     if (message.type === "register" && typeof message.deviceId === "string") {
+      if (!deviceAuthorized) return;
       deviceId = message.deviceId;
       devices.set(deviceId, {
         socket,
@@ -67,7 +91,7 @@ wss.on("connection", (socket, req) => {
     }
 
     if (!deviceId) {
-      if (message.type === "dashboard_hello") {
+      if (message.type === "dashboard_hello" && dashboardAuthorized) {
         isDashboard = true;
         dashboards.add(socket);
         sendJson(socket, { type: "devices", devices: publicDevices() });
@@ -102,6 +126,11 @@ wss.on("connection", (socket, req) => {
 app.get("/api/devices", (req, res) => {
   if (!authorized(req)) return res.status(401).json({ error: "Unauthorized" });
   res.json(publicDevices());
+});
+
+app.post("/api/dashboard-session", (req, res) => {
+  if (!authorized(req)) return res.status(401).json({ error: "Unauthorized" });
+  res.json({ token: createDashboardSession(), expiresIn: DASHBOARD_SESSION_TTL_MS });
 });
 
 app.post("/api/devices/:id/command", (req, res) => {
