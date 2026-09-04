@@ -45,31 +45,46 @@ object WorkoutHistory {
 
         val dir = File(context.filesDir, DIRECTORY)
         if (!dir.exists() && !dir.mkdirs()) return
-        File(dir, "${workout.getString("id")}.json").writeText(workout.toString())
-        prune(dir)
+
+        val id = workout.getString("id")
+        val target = File(dir, "$id.json")
+        val temp = File(dir, ".$id.tmp")
+        try {
+            temp.writeText(workout.toString())
+            if (!temp.renameTo(target)) {
+                target.writeText(temp.readText())
+                temp.delete()
+            }
+            prune(dir)
+        } catch (_: Exception) {
+            temp.delete()
+        }
     }
 
     fun list(context: Context): JSONArray {
         val dir = File(context.filesDir, DIRECTORY)
         if (!dir.isDirectory) return JSONArray()
-        val files = dir.listFiles { file -> file.isFile && file.extension == "json" }
-            ?.sortedByDescending { it.lastModified() }
-            .orEmpty()
-        val result = JSONArray()
-        for (file in files.take(MAX_WORKOUTS)) {
-            try {
-                val workout = JSONObject(file.readText())
-                workout.remove("route")
-                result.put(workout)
-            } catch (_: Exception) {
-                // Ignore one corrupt workout rather than failing the whole history request.
+        val parsed = dir.listFiles { file -> file.isFile && file.extension == "json" }
+            ?.mapNotNull { file ->
+                try {
+                    JSONObject(file.readText())
+                } catch (_: Exception) {
+                    null
+                }
             }
+            ?.sortedByDescending { it.optLong("endTime", 0L) }
+            .orEmpty()
+
+        val result = JSONArray()
+        for (workout in parsed.take(MAX_WORKOUTS)) {
+            workout.remove("route")
+            result.put(workout)
         }
         return result
     }
 
     fun get(context: Context, id: String): JSONObject? {
-        if (id.isBlank() || id.contains('/') || id.contains('\\')) return null
+        if (!isValidId(id)) return null
         val file = File(File(context.filesDir, DIRECTORY), "$id.json")
         if (!file.isFile) return null
         return try { JSONObject(file.readText()) } catch (_: Exception) { null }
@@ -77,10 +92,21 @@ object WorkoutHistory {
 
     private fun prune(dir: File) {
         val files = dir.listFiles { file -> file.isFile && file.extension == "json" }
-            ?.sortedByDescending { it.lastModified() }
+            ?.sortedByDescending {
+                try { JSONObject(it.readText()).optLong("endTime", it.lastModified()) }
+                catch (_: Exception) { it.lastModified() }
+            }
             .orEmpty()
         files.drop(MAX_WORKOUTS).forEach { it.delete() }
     }
+
+    private fun isValidId(id: String): Boolean =
+        try {
+            UUID.fromString(id)
+            true
+        } catch (_: IllegalArgumentException) {
+            false
+        }
 
     private fun parseRoute(value: String?): JSONArray =
         try { JSONArray(value ?: "[]") } catch (_: Exception) { JSONArray() }
