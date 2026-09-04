@@ -204,7 +204,10 @@ class LocationService : Service() {
         } else Float.MAX_VALUE
 
         val route = try { JSONArray(prefs.getString(KEY_ROUTE, "[]")) } catch (_: Exception) { JSONArray() }
-        if (oldLat == null || oldLon == null || distanceMeters >= MIN_ROUTE_DISTANCE_METERS) {
+        val validCoordinates = location.latitude.isFinite() && location.longitude.isFinite() &&
+            kotlin.math.abs(location.latitude) <= 90 && kotlin.math.abs(location.longitude) <= 180
+        val acceptPoint = validCoordinates && (oldLat == null || oldLon == null || distanceMeters <= MAX_ROUTE_JUMP_METERS)
+        if (acceptPoint && (oldLat == null || oldLon == null || distanceMeters >= MIN_ROUTE_DISTANCE_METERS)) {
             route.put(JSONObject().apply {
                 put("latitude", location.latitude)
                 put("longitude", location.longitude)
@@ -243,7 +246,6 @@ class LocationService : Service() {
     private fun stopLocationSession() {
         val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
         if (prefs.getBoolean(KEY_ACTIVE, false)) {
-            // Persist the completed workout before clearing the live-session state.
             WorkoutHistory.saveCompleted(this, prefs)
         }
         try {
@@ -328,6 +330,7 @@ class LocationService : Service() {
         private const val NOTIFICATION_ID = 1002
         private const val MAX_ROUTE_POINTS = 500
         private const val MIN_ROUTE_DISTANCE_METERS = 5f
+        private const val MAX_ROUTE_JUMP_METERS = 500f
 
         fun start(context: android.content.Context) = ContextCompat.startForegroundService(
             context, Intent(context, LocationService::class.java)
