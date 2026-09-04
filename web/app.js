@@ -4,6 +4,7 @@ let authToken = "";
 let dashboardSession = "";
 let socket = null;
 let devices = [];
+const maps = new Map();
 
 $("connect").onclick = async () => {
   const token = $("token").value.trim();
@@ -11,20 +12,14 @@ $("connect").onclick = async () => {
   authToken = token;
 
   try {
-    const r = await fetch("/api/devices", {
-      headers: { Authorization: `Bearer ${authToken}` }
-    });
+    const r = await fetch("/api/devices", { headers: { Authorization: `Bearer ${authToken}` } });
     if (!r.ok) throw new Error("Unauthorized");
     devices = await r.json();
-
     const sessionResponse = await fetch("/api/dashboard-session", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${authToken}` }
+      method: "POST", headers: { Authorization: `Bearer ${authToken}` }
     });
     if (!sessionResponse.ok) throw new Error("Could not create live dashboard session");
-    const session = await sessionResponse.json();
-    dashboardSession = session.token;
-
+    dashboardSession = (await sessionResponse.json()).token;
     $("server").textContent = "Connected";
     render();
     connectLive();
@@ -38,12 +33,10 @@ function connectLive() {
   if (socket) socket.close();
   const protocol = location.protocol === "https:" ? "wss:" : "ws:";
   socket = new WebSocket(`${protocol}//${location.host}/ws?session=${encodeURIComponent(dashboardSession)}`);
-
   socket.onopen = () => {
     socket.send(JSON.stringify({ type: "dashboard_hello" }));
     $("server").textContent = "Live";
   };
-
   socket.onmessage = event => {
     let message;
     try { message = JSON.parse(event.data); } catch { return; }
@@ -52,31 +45,23 @@ function connectLive() {
       render();
     } else if (message.type === "command_result") {
       const result = message.result || {};
-      const detail = result.ok
-        ? formatResult(result)
-        : (result.error || "Command failed");
-      console.info(`Device ${message.deviceId} result ${message.id}:`, result);
-      showMessage(`Command result: ${detail}`);
+      if (result.ok && result.latitude !== undefined && result.longitude !== undefined) updateMap(message.deviceId, result);
+      showMessage(`Command result: ${result.ok ? formatResult(result) : (result.error || "Command failed")}`);
     }
   };
-
-  socket.onclose = () => {
-    if (authToken) $("server").textContent = "Live disconnected";
-  };
-};
+  socket.onclose = () => { if (authToken) $("server").textContent = "Live disconnected"; };
+}
 
 function render() {
   const root = $("devices");
   root.innerHTML = "";
-  if (!devices.length) {
-    root.textContent = "No devices connected.";
-    return;
-  }
+  for (const entry of maps.values()) entry.map.remove();
+  maps.clear();
+  if (!devices.length) { root.textContent = "No devices connected."; return; }
 
   for (const d of devices) {
     const card = document.createElement("article");
     card.className = "device";
-
     const details = document.createElement("div");
     const name = document.createElement("strong");
     name.textContent = d.info?.model ? `${d.info.manufacturer || ""} ${d.info.model}`.trim() : d.deviceId;
@@ -86,14 +71,9 @@ function render() {
 
     const actions = document.createElement("div");
     for (const [label, commandName] of [
-      ["Status", "get_status"],
-      ["Device info", "get_device_info"],
-      ["Battery", "get_battery"],
-      ["Network", "get_network"],
-      ["Permissions", "get_permissions"],
-      ["Contacts count", "get_contacts_count"],
-      ["Calendar count", "get_calendar_count"],
-      ["Location", "get_location"]
+      ["Status", "get_status"], ["Device info", "get_device_info"], ["Battery", "get_battery"],
+      ["Network", "get_network"], ["Permissions", "get_permissions"], ["Contacts count", "get_contacts_count"],
+      ["Calendar count", "get_calendar_count"], ["Location", "get_location"]
     ]) {
       const button = document.createElement("button");
       button.textContent = label;
@@ -102,8 +82,18 @@ function render() {
       actions.appendChild(button);
     }
 
-    card.append(details, actions);
+    const mapHost = document.createElement("div");
+    mapHost.className = "map-host";
+    card.append(details, actions, mapHost);
     root.appendChild(card);
+
+    if (typeof L !== "undefined") {
+      const map = L.map(mapHost, { zoomControl: true }).setView([20, 0], 2);
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        maxZoom: 19, attribution: "&copy; OpenStreetMap contributors"
+      }).addTo(map);
+      maps.set(d.deviceId, { map, marker: null });
+    }
   }
 }
 
@@ -111,18 +101,31 @@ async function command(deviceId, commandName) {
   try {
     const r = await fetch(`/api/devices/${encodeURIComponent(deviceId)}/command`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${authToken}`
-      },
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
       body: JSON.stringify({ command: commandName })
     });
     const data = await r.json();
     if (!r.ok || !data.ok) throw new Error(data.error || "Command failed");
     showMessage(`Command sent: ${data.id}`);
-  } catch (e) {
-    showMessage(e.message);
-  }
+  } catch (e) { showMessage(e.message); }
+}
+
+function updateMap(deviceId, result) {
+  const entry = maps.get(deviceId);
+  if (!entry) return;
+  const latitude = Number(result.latitude), longitude = Number(result.longitude);
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude) || Math.abs(latitude) > 90 || Math.abs(longitude) > 180) return;
+  const popup = `Accuracy: ${formatAccuracy(result.accuracyMeters)}<br>Updated: ${new Date(result.timestamp).toLocaleString()}`;
+  if (!entry.marker) entry.marker = L.marker([latitude, longitude]).addTo(entry.map);
+  else entry.marker.setLatLng([latitude, longitude]);
+  entry.marker.bindPopup(popup);
+  entry.map.setView([latitude, longitude], 16);
+  setTimeout(() => entry.map.invalidateSize(), 0);
+}
+
+function formatAccuracy(value) {
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? `${Math.round(n)} m` : "unknown";
 }
 
 function formatResult(result) {
@@ -135,8 +138,7 @@ function formatResult(result) {
   if (result.calendarCount !== undefined) return `calendars: ${result.calendarCount}`;
   if (result.latitude !== undefined && result.longitude !== undefined) {
     const ageSeconds = Math.max(0, Math.round((Date.now() - result.timestamp) / 1000));
-    const accuracy = Number.isFinite(Number(result.accuracyMeters)) ? ` ±${Math.round(Number(result.accuracyMeters))}m` : "";
-    return `location: ${result.latitude}, ${result.longitude}${accuracy} · ${ageSeconds}s old`;
+    return `location: ${Number(result.latitude).toFixed(6)}, ${Number(result.longitude).toFixed(6)} · accuracy ${formatAccuracy(result.accuracyMeters)} · ${ageSeconds}s old`;
   }
   return JSON.stringify(result);
 }
