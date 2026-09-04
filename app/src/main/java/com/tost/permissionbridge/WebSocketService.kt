@@ -25,6 +25,7 @@ import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 import kotlin.math.min
@@ -211,6 +212,7 @@ class WebSocketService : Service() {
                         .put("longitude", longitude)
                         .put("accuracyMeters", accuracy)
                         .put("route", getRoute(locationPrefs))
+                        .put("metrics", getRouteMetrics(locationPrefs))
                 }
             }
             else -> result.put("ok", false).put("error", "Unsupported command")
@@ -218,8 +220,49 @@ class WebSocketService : Service() {
         socket.send(result.toString())
     }
 
-    private fun getRoute(prefs: android.content.SharedPreferences): org.json.JSONArray =
-        try { org.json.JSONArray(prefs.getString(LocationService.KEY_ROUTE, "[]")) } catch (_: Exception) { org.json.JSONArray() }
+    private fun getRoute(prefs: android.content.SharedPreferences): JSONArray =
+        try { JSONArray(prefs.getString(LocationService.KEY_ROUTE, "[]")) } catch (_: Exception) { JSONArray() }
+
+    private fun getRouteMetrics(prefs: android.content.SharedPreferences): JSONObject {
+        val route = getRoute(prefs)
+        var distanceMeters = 0.0
+        var firstTimestamp = 0L
+        var lastTimestamp = 0L
+        var previousLat = 0.0
+        var previousLon = 0.0
+        var hasPrevious = false
+
+        for (index in 0 until route.length()) {
+            val point = route.optJSONObject(index) ?: continue
+            val lat = point.optDouble("latitude", Double.NaN)
+            val lon = point.optDouble("longitude", Double.NaN)
+            val timestamp = point.optLong("timestamp", 0L)
+            if (!lat.isFinite() || !lon.isFinite() || timestamp <= 0L || kotlin.math.abs(lat) > 90 || kotlin.math.abs(lon) > 180) continue
+            if (firstTimestamp == 0L) firstTimestamp = timestamp
+            lastTimestamp = maxOf(lastTimestamp, timestamp)
+            if (hasPrevious) {
+                val distance = android.location.Location.distanceBetween(previousLat, previousLon, lat, lon, null)
+                // Ignore obviously bad GPS jumps instead of inflating the route.
+                if (distance <= MAX_POINT_JUMP_METERS) distanceMeters += distance.toDouble()
+            }
+            previousLat = lat
+            previousLon = lon
+            hasPrevious = true
+        }
+
+        val durationSeconds = if (firstTimestamp > 0L && lastTimestamp >= firstTimestamp) {
+            (lastTimestamp - firstTimestamp) / 1000L
+        } else 0L
+        val averageSpeedMps = if (durationSeconds > 0) distanceMeters / durationSeconds else 0.0
+        val paceSecondsPerKm = if (averageSpeedMps > 0.1) 1000.0 / averageSpeedMps else 0.0
+
+        return JSONObject()
+            .put("distanceMeters", distanceMeters)
+            .put("durationSeconds", durationSeconds)
+            .put("averageSpeedMps", averageSpeedMps)
+            .put("paceSecondsPerKm", paceSecondsPerKm)
+            .put("routePoints", route.length())
+    }
 
     private fun scheduleReconnect() {
         handler.removeCallbacks(reconnectRunnable)
@@ -283,6 +326,7 @@ class WebSocketService : Service() {
         const val ACTION_STOP = "com.tost.permissionbridge.STOP"
         private const val CHANNEL_ID = "tost_connection"
         private const val NOTIFICATION_ID = 1001
+        private const val MAX_POINT_JUMP_METERS = 500.0
 
         fun start(context: Context) = ContextCompat.startForegroundService(
             context, Intent(context, WebSocketService::class.java)
