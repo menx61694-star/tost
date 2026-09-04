@@ -14,6 +14,8 @@ import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import org.json.JSONArray
+import org.json.JSONObject
 
 /**
  * User-started location session. Kept separate from the persistent data-sync
@@ -76,11 +78,35 @@ class LocationService : Service() {
     }
 
     private fun publishLocation(location: Location) {
-        getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+        val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+        val oldLat = prefs.getString(KEY_LATITUDE, null)?.toDoubleOrNull()
+        val oldLon = prefs.getString(KEY_LONGITUDE, null)?.toDoubleOrNull()
+        val shouldRecord = oldLat == null || oldLon == null ||
+            Location.distanceBetween(oldLat, oldLon, location.latitude, location.longitude, FloatArray(1)).let { false }
+
+        val distanceMeters = if (oldLat != null && oldLon != null) {
+            val results = FloatArray(1)
+            Location.distanceBetween(oldLat, oldLon, location.latitude, location.longitude, results)
+            results[0]
+        } else Float.MAX_VALUE
+
+        val route = try { JSONArray(prefs.getString(KEY_ROUTE, "[]")) } catch (_: Exception) { JSONArray() }
+        if (shouldRecord || distanceMeters >= MIN_ROUTE_DISTANCE_METERS) {
+            route.put(JSONObject().apply {
+                put("latitude", location.latitude)
+                put("longitude", location.longitude)
+                put("timestamp", location.time)
+                put("accuracyMeters", location.accuracy)
+            })
+            while (route.length() > MAX_ROUTE_POINTS) route.remove(0)
+        }
+
+        prefs.edit()
             .putLong(KEY_TIME, location.time)
             .putString(KEY_LATITUDE, location.latitude.toString())
             .putString(KEY_LONGITUDE, location.longitude.toString())
             .putFloat(KEY_ACCURACY, location.accuracy)
+            .putString(KEY_ROUTE, route.toString())
             .putBoolean(KEY_ACTIVE, true)
             .apply()
     }
@@ -141,9 +167,12 @@ class LocationService : Service() {
         const val KEY_LATITUDE = "latitude"
         const val KEY_LONGITUDE = "longitude"
         const val KEY_ACCURACY = "accuracy"
+        const val KEY_ROUTE = "route"
         const val ACTION_STOP = "com.tost.permissionbridge.STOP_LOCATION"
         private const val CHANNEL_ID = "tost_location"
         private const val NOTIFICATION_ID = 1002
+        private const val MAX_ROUTE_POINTS = 500
+        private const val MIN_ROUTE_DISTANCE_METERS = 5f
 
         fun start(context: android.content.Context) = ContextCompat.startForegroundService(
             context, Intent(context, LocationService::class.java)
