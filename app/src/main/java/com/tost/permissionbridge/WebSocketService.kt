@@ -215,6 +215,18 @@ class WebSocketService : Service() {
                         .put("metrics", getRouteMetrics(locationPrefs))
                 }
             }
+            "get_workout_history" -> {
+                result.put("ok", true).put("workouts", WorkoutHistory.list(this))
+            }
+            "get_workout" -> {
+                val workoutId = message.optString("workoutId")
+                val workout = WorkoutHistory.get(this, workoutId)
+                if (workout == null) {
+                    result.put("ok", false).put("error", "Workout not found")
+                } else {
+                    result.put("ok", true).put("workout", workout)
+                }
+            }
             else -> result.put("ok", false).put("error", "Unsupported command")
         }
         socket.send(result.toString())
@@ -237,15 +249,8 @@ class WebSocketService : Service() {
             if (!lat.isFinite() || !lon.isFinite() || kotlin.math.abs(lat) > 90 || kotlin.math.abs(lon) > 180) continue
             if (hasPrevious) {
                 val results = FloatArray(1)
-                android.location.Location.distanceBetween(
-                    previousLat,
-                    previousLon,
-                    lat,
-                    lon,
-                    results
-                )
+                android.location.Location.distanceBetween(previousLat, previousLon, lat, lon, results)
                 val distance = results[0].toDouble()
-                // Ignore obviously bad GPS jumps instead of inflating the route.
                 if (distance <= MAX_POINT_JUMP_METERS) distanceMeters += distance
             }
             previousLat = lat
