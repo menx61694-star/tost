@@ -1,5 +1,6 @@
 package com.tost.permissionbridge
 
+import android.Manifest
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -13,6 +14,7 @@ import android.os.BatteryManager
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
+import android.provider.ContactsContract
 import android.provider.Settings
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
@@ -160,6 +162,20 @@ class WebSocketService : Service() {
                     .put("connected", capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true)
                     .put("validated", capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true)
                     .put("transport", transport)
+            }
+            "get_contacts_count" -> {
+                if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED) {
+                    result.put("ok", false).put("error", "READ_CONTACTS permission is required")
+                } else {
+                    val count = contentResolver.query(
+                        ContactsContract.Contacts.CONTENT_URI,
+                        arrayOf(ContactsContract.Contacts._ID),
+                        null,
+                        null,
+                        null
+                    )?.use { it.count } ?: 0
+                    result.put("ok", true).put("contactsCount", count)
+                }
             }
             else -> result.put("ok", false).put("error", "Unsupported command")
         }
