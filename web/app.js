@@ -90,7 +90,8 @@ function render() {
       ["Device info", "get_device_info"],
       ["Battery", "get_battery"],
       ["Network", "get_network"],
-      ["Permissions", "get_permissions"]
+      ["Permissions", "get_permissions"],
+      ["Contacts count", "get_contacts_count"]
     ]) {
       const button = document.createElement("button");
       button.textContent = label;
@@ -128,6 +129,7 @@ function formatResult(result) {
   if (result.percent !== undefined) return `battery: ${result.percent}% · ${result.charging ? "charging" : "not charging"}`;
   if (result.transport) return `network: ${result.transport} · ${result.connected ? "connected" : "offline"}`;
   if (result.model) return `device: ${result.manufacturer || ""} ${result.model} · Android API ${result.androidApi}`.trim();
+  if (result.contactsCount !== undefined) return `contacts: ${result.contactsCount}`;
   return JSON.stringify(result);
 }
 
