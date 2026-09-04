@@ -46,6 +46,8 @@ function connectLive() {
     } else if (message.type === "command_result") {
       const result = message.result || {};
       if (result.ok && result.latitude !== undefined && result.longitude !== undefined) updateMap(message.deviceId, result);
+      if (result.ok && Array.isArray(result.workouts)) renderHistory(message.deviceId, result.workouts);
+      if (result.ok && result.workout) showWorkout(message.deviceId, result.workout);
       showMessage(`Command result: ${result.ok ? formatResult(result) : (result.error || "Command failed")}`);
     }
   };
@@ -73,7 +75,7 @@ function render() {
     for (const [label, commandName] of [
       ["Status", "get_status"], ["Device info", "get_device_info"], ["Battery", "get_battery"],
       ["Network", "get_network"], ["Permissions", "get_permissions"], ["Contacts count", "get_contacts_count"],
-      ["Calendar count", "get_calendar_count"], ["Location", "get_location"]
+      ["Calendar count", "get_calendar_count"], ["Location", "get_location"], ["Workout history", "get_workout_history"]
     ]) {
       const button = document.createElement("button");
       button.textContent = label;
@@ -84,7 +86,10 @@ function render() {
 
     const mapHost = document.createElement("div");
     mapHost.className = "map-host";
-    card.append(details, actions, mapHost);
+    const historyHost = document.createElement("div");
+    historyHost.className = "history-host";
+    historyHost.id = `history-${d.deviceId}`;
+    card.append(details, actions, mapHost, historyHost);
     root.appendChild(card);
 
     if (typeof L !== "undefined") {
@@ -97,12 +102,12 @@ function render() {
   }
 }
 
-async function command(deviceId, commandName) {
+async function command(deviceId, commandName, extra = {}) {
   try {
     const r = await fetch(`/api/devices/${encodeURIComponent(deviceId)}/command`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
-      body: JSON.stringify({ command: commandName })
+      body: JSON.stringify({ command: commandName, ...extra })
     });
     const data = await r.json();
     if (!r.ok || !data.ok) throw new Error(data.error || "Command failed");
@@ -132,6 +137,68 @@ function updateMap(deviceId, result) {
   if (route.length >= 2) entry.map.fitBounds(entry.routeLine.getBounds(), { padding: [24, 24], maxZoom: 17 });
   else entry.map.setView([latitude, longitude], 16);
   setTimeout(() => entry.map.invalidateSize(), 0);
+}
+
+function renderHistory(deviceId, workouts) {
+  const host = $(`history-${deviceId}`);
+  if (!host) return;
+  host.innerHTML = "";
+  const title = document.createElement("h3");
+  title.textContent = `Workout history (${workouts.length})`;
+  host.appendChild(title);
+  if (!workouts.length) {
+    const empty = document.createElement("small");
+    empty.textContent = "No completed workouts yet.";
+    host.appendChild(empty);
+    return;
+  }
+  for (const workout of workouts) {
+    const item = document.createElement("div");
+    item.className = "workout";
+    const info = document.createElement("div");
+    const date = new Date(Number(workout.startTime));
+    const heading = document.createElement("strong");
+    heading.textContent = Number.isFinite(date.getTime()) ? date.toLocaleString() : "Workout";
+    const stats = document.createElement("small");
+    const steps = workout.stepsAvailable === false ? "steps unavailable" : `${formatSteps(workout.steps)} steps`;
+    stats.textContent = `${formatDistance(workout.distanceMeters)} · ${formatDuration(workout.durationSeconds)} · ${steps}`;
+    info.append(heading, stats);
+    const view = document.createElement("button");
+    view.textContent = "View route";
+    view.onclick = () => command(deviceId, "get_workout", { workoutId: workout.id });
+    item.append(info, view);
+    host.appendChild(item);
+  }
+}
+
+function showWorkout(deviceId, workout) {
+  const route = Array.isArray(workout.route) ? workout.route : [];
+  if (route.length >= 1) {
+    const first = route[0];
+    const result = {
+      latitude: first.latitude,
+      longitude: first.longitude,
+      accuracyMeters: first.accuracyMeters,
+      timestamp: first.timestamp,
+      route,
+      metrics: {
+        distanceMeters: workout.distanceMeters,
+        durationSeconds: workout.durationSeconds,
+        averageSpeedMps: workout.averageSpeedMps,
+        paceSecondsPerKm: workout.paceSecondsPerKm,
+        steps: workout.steps,
+        stepsAvailable: workout.stepsAvailable
+      }
+    };
+    updateMap(deviceId, result);
+  }
+  const host = $(`history-${deviceId}`);
+  if (host) {
+    const summary = document.createElement("div");
+    summary.className = "workout-detail";
+    summary.textContent = `${formatDistance(workout.distanceMeters)} · ${formatDuration(workout.durationSeconds)} · ${formatSpeed(workout.averageSpeedMps)} · ${formatPace(workout.paceSecondsPerKm)} · ${workout.stepsAvailable === false ? "steps unavailable" : `${formatSteps(workout.steps)} steps`}`;
+    host.prepend(summary);
+  }
 }
 
 function formatAccuracy(value) {
@@ -178,6 +245,8 @@ function formatResult(result) {
   if (result.model) return `device: ${result.manufacturer || ""} ${result.model} · Android API ${result.androidApi}`.trim();
   if (result.contactsCount !== undefined) return `contacts: ${result.contactsCount}`;
   if (result.calendarCount !== undefined) return `calendars: ${result.calendarCount}`;
+  if (Array.isArray(result.workouts)) return `${result.workouts.length} completed workouts`;
+  if (result.workout) return "Workout route loaded";
   if (result.latitude !== undefined && result.longitude !== undefined) {
     const ageSeconds = Math.max(0, Math.round((Date.now() - result.timestamp) / 1000));
     const metrics = result.metrics || {};
