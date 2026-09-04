@@ -218,11 +218,40 @@ function showWorkout(deviceId, workout) {
   }
   const host = $(`history-${deviceId}`);
   if (host) {
-    const summary = document.createElement("div");
-    summary.className = "workout-detail";
-    summary.textContent = `${formatDistance(workout.distanceMeters)} · ${formatDuration(workout.durationSeconds)} · ${formatSpeed(workout.averageSpeedMps)} · ${formatPace(workout.paceSecondsPerKm)} · ${workout.stepsAvailable === false ? "steps unavailable" : `${formatSteps(workout.steps)} steps`}`;
-    host.prepend(summary);
+    const detail = document.createElement("div");
+    detail.className = "workout-detail-card";
+    const title = document.createElement("h4");
+    title.textContent = "Workout details";
+    const grid = document.createElement("div");
+    grid.className = "workout-stat-grid";
+    const stats = [
+      ["Distance", formatDistance(workout.distanceMeters)],
+      ["Duration", formatDuration(workout.durationSeconds)],
+      ["Avg speed", formatSpeed(workout.averageSpeedMps)],
+      ["Pace", formatPace(workout.paceSecondsPerKm)],
+      ["Steps", workout.stepsAvailable === false ? "Unavailable" : formatSteps(workout.steps)]
+    ];
+    for (const [label, value] of stats) {
+      const box = document.createElement("div");
+      box.className = "workout-stat";
+      const labelNode = document.createElement("small");
+      labelNode.textContent = label;
+      const valueNode = document.createElement("strong");
+      valueNode.textContent = value;
+      box.append(labelNode, valueNode);
+      grid.appendChild(box);
+    }
+    const times = document.createElement("small");
+    times.className = "workout-times";
+    times.textContent = `${formatDateTime(workout.startTime)} → ${formatDateTime(workout.endTime)}`;
+    detail.append(title, grid, times);
+    host.prepend(detail);
   }
+}
+
+function formatDateTime(value) {
+  const date = new Date(Number(value));
+  return Number.isFinite(date.getTime()) ? date.toLocaleString() : "Unknown time";
 }
 
 function formatAccuracy(value) {
