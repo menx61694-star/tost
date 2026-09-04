@@ -91,7 +91,8 @@ function render() {
       ["Battery", "get_battery"],
       ["Network", "get_network"],
       ["Permissions", "get_permissions"],
-      ["Contacts count", "get_contacts_count"]
+      ["Contacts count", "get_contacts_count"],
+      ["Calendar count", "get_calendar_count"]
     ]) {
       const button = document.createElement("button");
       button.textContent = label;
@@ -130,6 +131,7 @@ function formatResult(result) {
   if (result.transport) return `network: ${result.transport} · ${result.connected ? "connected" : "offline"}`;
   if (result.model) return `device: ${result.manufacturer || ""} ${result.model} · Android API ${result.androidApi}`.trim();
   if (result.contactsCount !== undefined) return `contacts: ${result.contactsCount}`;
+  if (result.calendarCount !== undefined) return `calendars: ${result.calendarCount}`;
   return JSON.stringify(result);
 }
 
