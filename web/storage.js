@@ -1,14 +1,34 @@
 const storagePanel = document.createElement("section");
 storagePanel.className = "panel storage-panel";
 storagePanel.innerHTML = `
-  <h2>Storage diagnostics</h2>
+  <div class="panel-heading">
+    <div>
+      <h2>Storage diagnostics</h2>
+      <small>Check available device storage without reading personal files.</small>
+    </div>
+    <button id="refresh-storage" type="button">Refresh</button>
+  </div>
   <div id="storage-devices" class="storage-devices"><small>Connect to load device storage.</small></div>
 `;
 $("devices").parentElement.parentElement.appendChild(storagePanel);
 
+async function requestStorage(deviceId) {
+  const response = await fetch(`/api/devices/${encodeURIComponent(deviceId)}/command`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${authToken}`
+    },
+    body: JSON.stringify({ command: "get_storage" })
+  });
+  const data = await response.json();
+  if (!response.ok || !data.ok) throw new Error(data.error || "Storage request failed");
+  return data;
+}
+
 async function loadStorageDevices() {
   const host = $("storage-devices");
-  if (!authToken) return;
+  if (!host || !authToken) return;
   try {
     const response = await fetch("/api/devices", {
       headers: { Authorization: `Bearer ${authToken}` }
@@ -34,6 +54,10 @@ async function loadStorageDevices() {
       result.textContent = device.status === "online" ? "Ready" : "Offline";
       info.append(name, result);
 
+      const value = document.createElement("div");
+      value.className = "storage-value";
+      value.textContent = "—";
+
       const button = document.createElement("button");
       button.textContent = "Check storage";
       button.disabled = device.status !== "online";
@@ -41,17 +65,9 @@ async function loadStorageDevices() {
         button.disabled = true;
         result.textContent = "Reading storage…";
         try {
-          const response = await fetch(`/api/devices/${encodeURIComponent(device.deviceId)}/command`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${authToken}`
-            },
-            body: JSON.stringify({ command: "get_storage" })
-          });
-          const data = await response.json();
-          if (!response.ok || !data.ok) throw new Error(data.error || "Storage request failed");
-          result.textContent = formatStorageResult(data);
+          const data = await requestStorage(device.deviceId);
+          value.textContent = formatStorageResult(data);
+          result.textContent = "Updated just now";
         } catch (error) {
           result.textContent = error.message;
         } finally {
@@ -59,13 +75,15 @@ async function loadStorageDevices() {
         }
       };
 
-      row.append(info, button);
+      row.append(info, value, button);
       host.appendChild(row);
     }
   } catch (error) {
     host.textContent = error.message;
   }
 }
+
+$("refresh-storage").onclick = loadStorageDevices;
 
 const originalConnect = $("connect").onclick;
 $("connect").onclick = async event => {
@@ -77,7 +95,7 @@ function formatStorageResult(data) {
   const total = Number(data.totalBytes);
   const free = Number(data.freeBytes);
   const used = Number(data.usedBytes);
-  if (![total, free, used].every(Number.isFinite) || total < 0 || free < 0 || used < 0) {
+  if (![total, free, used].every(Number.isFinite) || total < 0 || free < 0 || used < 0 || used > total) {
     return "Storage data unavailable";
   }
   const percent = total > 0 ? Math.round((used / total) * 100) : 0;
