@@ -3,6 +3,7 @@ package com.tost.permissionbridge
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
@@ -17,10 +18,6 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 
 class MainActivity : AppCompatActivity() {
-
-    private val permissionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions()
-    ) { renderPermissions() }
 
     private val singlePermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -109,11 +106,29 @@ class MainActivity : AppCompatActivity() {
                 this,
                 Manifest.permission.ACCESS_BACKGROUND_LOCATION
             ) == PackageManager.PERMISSION_GRANTED
-            addActionRow(
-                "Background location",
-                if (granted) "Granted" else "Not granted"
-            ) {
-                if (!granted) singlePermissionLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+            val foregroundGranted = ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.ACCESS_COARSE_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED ||
+                ContextCompat.checkSelfPermission(
+                    this,
+                    Manifest.permission.ACCESS_FINE_LOCATION
+                ) == PackageManager.PERMISSION_GRANTED
+
+            val actionText = when {
+                granted -> "Granted"
+                !foregroundGranted -> "Grant location first"
+                Build.VERSION.SDK_INT >= 30 -> "Open Settings"
+                else -> "Request"
+            }
+
+            addActionRow("Background location", actionText) {
+                when {
+                    granted -> Unit
+                    !foregroundGranted -> singlePermissionLauncher.launch(Manifest.permission.ACCESS_COARSE_LOCATION)
+                    Build.VERSION.SDK_INT >= 30 -> openAppDetailsSettings()
+                    else -> singlePermissionLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+                }
             }
         }
 
@@ -130,6 +145,14 @@ class MainActivity : AppCompatActivity() {
             text = "Some permissions are signature, privileged, hard-restricted, or Play-policy restricted. Tost will not pretend they are ordinary runtime permissions. They need a qualifying system role, installer allowlist, default-handler role, or feature-specific approval."
             setPadding(0, 0, 0, 12)
         })
+    }
+
+    private fun openAppDetailsSettings() {
+        startActivity(
+            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                data = Uri.parse("package:$packageName")
+            }
+        )
     }
 
     private fun addSection(title: String) {
