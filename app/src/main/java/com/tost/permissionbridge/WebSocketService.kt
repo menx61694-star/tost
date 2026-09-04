@@ -241,9 +241,17 @@ class WebSocketService : Service() {
             if (firstTimestamp == 0L) firstTimestamp = timestamp
             lastTimestamp = maxOf(lastTimestamp, timestamp)
             if (hasPrevious) {
-                val distance = android.location.Location.distanceBetween(previousLat, previousLon, lat, lon, null)
+                val results = FloatArray(1)
+                android.location.Location.distanceBetween(
+                    previousLat,
+                    previousLon,
+                    lat,
+                    lon,
+                    results
+                )
+                val distance = results[0].toDouble()
                 // Ignore obviously bad GPS jumps instead of inflating the route.
-                if (distance <= MAX_POINT_JUMP_METERS) distanceMeters += distance.toDouble()
+                if (distance <= MAX_POINT_JUMP_METERS) distanceMeters += distance
             }
             previousLat = lat
             previousLon = lon
