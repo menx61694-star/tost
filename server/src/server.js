@@ -72,6 +72,13 @@ wss.on("connection", (socket, req) => {
   let deviceId = null;
   let isDashboard = false;
 
+  socket.on("pong", () => {
+    if (!deviceId) return;
+    const device = devices.get(deviceId);
+    if (!device || device.socket !== socket) return;
+    device.lastSeen = Date.now();
+  });
+
   socket.on("message", raw => {
     let message;
     try { message = JSON.parse(raw.toString()); } catch { return; }
