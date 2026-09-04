@@ -7,10 +7,10 @@ async function refreshLiveDiagnostics() {
   try {
     const onlineDevices = devices.filter(device => device.status === "online");
     for (const device of onlineDevices) {
-      await command(device.deviceId, "get_status");
+      await command(device.deviceId, "get_status", {}, { silent: true });
       const state = liveStates.get(device.deviceId);
       if (state?.locationSessionActive === true) {
-        await command(device.deviceId, "get_location");
+        await command(device.deviceId, "get_location", {}, { silent: true });
       }
     }
   } finally {
