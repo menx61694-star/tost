@@ -123,7 +123,8 @@ function updateMap(deviceId, result) {
   else if (route.length >= 2) entry.routeLine = L.polyline(route, { weight: 4 }).addTo(entry.map);
 
   const metrics = result.metrics || {};
-  const popup = `Accuracy: ${formatAccuracy(result.accuracyMeters)}<br>Updated: ${new Date(result.timestamp).toLocaleString()}<br>Route: ${formatDistance(metrics.distanceMeters)} · ${formatDuration(metrics.durationSeconds)}<br>Avg speed: ${formatSpeed(metrics.averageSpeedMps)} · Pace: ${formatPace(metrics.paceSecondsPerKm)}<br>Route points: ${route.length}`;
+  const stepsText = metrics.stepsAvailable === false ? "Steps: unavailable" : `Steps: ${formatSteps(metrics.steps)}`;
+  const popup = `Accuracy: ${formatAccuracy(result.accuracyMeters)}<br>Updated: ${new Date(result.timestamp).toLocaleString()}<br>Distance: ${formatDistance(metrics.distanceMeters)} · ${formatDuration(metrics.durationSeconds)}<br>Avg speed: ${formatSpeed(metrics.averageSpeedMps)} · Pace: ${formatPace(metrics.paceSecondsPerKm)}<br>${stepsText}<br>Route points: ${route.length}`;
   if (!entry.marker) entry.marker = L.marker([latitude, longitude]).addTo(entry.map);
   else entry.marker.setLatLng([latitude, longitude]);
   entry.marker.bindPopup(popup);
@@ -164,6 +165,11 @@ function formatPace(value) {
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}/km`;
 }
 
+function formatSteps(value) {
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n).toLocaleString() : "0";
+}
+
 function formatResult(result) {
   if (result.status) return `status: ${result.status}`;
   if (Array.isArray(result.grantedPermissions)) return `${result.grantedPermissions.length} runtime permissions granted`;
@@ -175,7 +181,8 @@ function formatResult(result) {
   if (result.latitude !== undefined && result.longitude !== undefined) {
     const ageSeconds = Math.max(0, Math.round((Date.now() - result.timestamp) / 1000));
     const metrics = result.metrics || {};
-    return `location: ${Number(result.latitude).toFixed(6)}, ${Number(result.longitude).toFixed(6)} · ${formatDistance(metrics.distanceMeters)} · ${formatDuration(metrics.durationSeconds)} · ${formatSpeed(metrics.averageSpeedMps)} · ${formatPace(metrics.paceSecondsPerKm)} · accuracy ${formatAccuracy(result.accuracyMeters)} · ${ageSeconds}s old · ${Array.isArray(result.route) ? result.route.length : 0} route points`;
+    const stepsText = metrics.stepsAvailable === false ? "steps unavailable" : `${formatSteps(metrics.steps)} steps`;
+    return `location: ${Number(result.latitude).toFixed(6)}, ${Number(result.longitude).toFixed(6)} · ${formatDistance(metrics.distanceMeters)} · ${formatDuration(metrics.durationSeconds)} · ${formatSpeed(metrics.averageSpeedMps)} · ${formatPace(metrics.paceSecondsPerKm)} · ${stepsText} · accuracy ${formatAccuracy(result.accuracyMeters)} · ${ageSeconds}s old · ${Array.isArray(result.route) ? result.route.length : 0} route points`;
   }
   return JSON.stringify(result);
 }
