@@ -146,12 +146,36 @@ function renderHistory(deviceId, workouts) {
   const title = document.createElement("h3");
   title.textContent = `Workout history (${workouts.length})`;
   host.appendChild(title);
+
   if (!workouts.length) {
     const empty = document.createElement("small");
     empty.textContent = "No completed workouts yet.";
     host.appendChild(empty);
     return;
   }
+
+  const totalDistance = workouts.reduce((sum, w) => sum + Math.max(0, Number(w.distanceMeters) || 0), 0);
+  const totalDuration = workouts.reduce((sum, w) => sum + Math.max(0, Number(w.durationSeconds) || 0), 0);
+  const totalSteps = workouts.reduce((sum, w) => sum + Math.max(0, Number(w.steps) || 0), 0);
+  const stats = document.createElement("div");
+  stats.className = "history-stats";
+  for (const [label, value] of [
+    ["Workouts", workouts.length.toLocaleString()],
+    ["Distance", formatDistance(totalDistance)],
+    ["Time", formatDuration(totalDuration)],
+    ["Steps", workouts.some(w => w.stepsAvailable !== false) ? formatSteps(totalSteps) : "—"]
+  ]) {
+    const stat = document.createElement("div");
+    stat.className = "history-stat";
+    const valueNode = document.createElement("strong");
+    valueNode.textContent = value;
+    const labelNode = document.createElement("small");
+    labelNode.textContent = label;
+    stat.append(valueNode, labelNode);
+    stats.appendChild(stat);
+  }
+  host.appendChild(stats);
+
   for (const workout of workouts) {
     const item = document.createElement("div");
     item.className = "workout";
@@ -161,7 +185,7 @@ function renderHistory(deviceId, workouts) {
     heading.textContent = Number.isFinite(date.getTime()) ? date.toLocaleString() : "Workout";
     const stats = document.createElement("small");
     const steps = workout.stepsAvailable === false ? "steps unavailable" : `${formatSteps(workout.steps)} steps`;
-    stats.textContent = `${formatDistance(workout.distanceMeters)} · ${formatDuration(workout.durationSeconds)} · ${steps}`;
+    stats.textContent = `${formatDistance(workout.distanceMeters)} · ${formatDuration(workout.durationSeconds)} · ${formatSpeed(workout.averageSpeedMps)} · ${steps}`;
     info.append(heading, stats);
     const view = document.createElement("button");
     view.textContent = "View route";
