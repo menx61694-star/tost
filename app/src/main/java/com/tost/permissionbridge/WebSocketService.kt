@@ -72,10 +72,16 @@ class WebSocketService : Service() {
             return
         }
 
-        val request = Request.Builder()
-            .url(endpoint)
-            .header("Authorization", "Bearer $token")
-            .build()
+        val request = try {
+            Request.Builder()
+                .url(endpoint)
+                .header("Authorization", "Bearer $token")
+                .build()
+        } catch (_: IllegalArgumentException) {
+            updateNotification("Invalid server URL")
+            return
+        }
+
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(socket: WebSocket, response: Response) {
                 reconnectAttempt = 0
@@ -196,6 +202,7 @@ class WebSocketService : Service() {
             "get_location" -> {
                 val locationPrefs = getSharedPreferences(LocationService.PREFS, MODE_PRIVATE)
                 val active = locationPrefs.getBoolean(LocationService.KEY_ACTIVE, false)
+                val paused = locationPrefs.getBoolean(LocationService.KEY_PAUSED, false)
                 val latitude = locationPrefs.getString(LocationService.KEY_LATITUDE, null)
                 val longitude = locationPrefs.getString(LocationService.KEY_LONGITUDE, null)
                 val time = locationPrefs.getLong(LocationService.KEY_TIME, 0L)
@@ -207,6 +214,7 @@ class WebSocketService : Service() {
                 } else {
                     result.put("ok", true)
                         .put("source", "location_session")
+                        .put("paused", paused)
                         .put("timestamp", time)
                         .put("latitude", latitude)
                         .put("longitude", longitude)
@@ -281,6 +289,7 @@ class WebSocketService : Service() {
             .put("routePoints", route.length())
             .put("steps", steps)
             .put("stepsAvailable", stepsAvailable)
+            .put("paused", currentlyPaused)
     }
 
     private fun scheduleReconnect() {
