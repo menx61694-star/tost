@@ -105,14 +105,14 @@ class MainActivity : AppCompatActivity() {
             addView(connectButton)
             addView(stopButton)
             addView(TextView(this@MainActivity).apply {
-                text = "Location session"
+                text = "Location & steps session"
                 textSize = 20f
                 setPadding(0, 24, 0, 8)
             })
             addView(locationStatus)
             addView(locationControls)
             addView(TextView(this@MainActivity).apply {
-                text = "Location is user-started and remains visible through the foreground-service notification. Pause stops GPS updates without ending the session; Stop ends the session."
+                text = "Location and step counting are user-started. Pause stops GPS and step updates without ending the session; Resume continues the same workout. Stop ends the session. Step counting requires Activity recognition on Android 10+ and a device step-counter sensor."
                 setPadding(0, 8, 0, 8)
             })
             addView(TextView(this@MainActivity).apply {
@@ -139,12 +139,20 @@ class MainActivity : AppCompatActivity() {
     private fun startLocationSession() {
         val hasForegroundLocation = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
             ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
-        if (hasForegroundLocation) {
-            LocationService.start(this)
-            window.decorView.postDelayed(::updateLocationControls, 150)
-        } else {
+        if (!hasForegroundLocation) {
             singlePermissionLauncher.launch(Manifest.permission.ACCESS_COARSE_LOCATION)
+            return
         }
+
+        if (Build.VERSION.SDK_INT >= 29 &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.ACTIVITY_RECOGNITION) != PackageManager.PERMISSION_GRANTED
+        ) {
+            singlePermissionLauncher.launch(Manifest.permission.ACTIVITY_RECOGNITION)
+            return
+        }
+
+        LocationService.start(this)
+        window.decorView.postDelayed(::updateLocationControls, 150)
     }
 
     private fun updateLocationControls() {
@@ -152,6 +160,10 @@ class MainActivity : AppCompatActivity() {
         val prefs = getSharedPreferences(LocationService.PREFS, MODE_PRIVATE)
         val active = prefs.getBoolean(LocationService.KEY_ACTIVE, false)
         val paused = prefs.getBoolean(LocationService.KEY_PAUSED, false)
+        val stepsAvailable = prefs.getBoolean(LocationService.KEY_STEPS_AVAILABLE, false)
+        val stepText = if (active) {
+            if (stepsAvailable) " · step counter available" else " · steps unavailable"
+        } else ""
         when {
             !active -> {
                 locationStatus.text = "Ready — no active session"
@@ -161,14 +173,14 @@ class MainActivity : AppCompatActivity() {
                 locationStopButton.isEnabled = false
             }
             paused -> {
-                locationStatus.text = "Paused — route is preserved"
+                locationStatus.text = "Paused — route and steps are preserved$stepText"
                 locationStartButton.isEnabled = false
                 locationPauseButton.isEnabled = true
                 locationPauseButton.text = "Resume"
                 locationStopButton.isEnabled = true
             }
             else -> {
-                locationStatus.text = "Running — GPS updates active"
+                locationStatus.text = "Running — GPS and step updates active$stepText"
                 locationStartButton.isEnabled = false
                 locationPauseButton.isEnabled = true
                 locationPauseButton.text = "Pause"
