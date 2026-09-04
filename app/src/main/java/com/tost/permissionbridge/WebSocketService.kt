@@ -50,18 +50,22 @@ class WebSocketService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
-            stopping = true
-            handler.removeCallbacks(reconnectRunnable)
-            webSocket?.close(1000, "Stopped by user")
-            webSocket = null
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
+            stopConnectionAndService()
             return START_NOT_STICKY
         }
         stopping = false
-        startAsForeground()
+        if (!startAsForeground()) return START_NOT_STICKY
         connect()
         return START_STICKY
+    }
+
+    private fun stopConnectionAndService() {
+        stopping = true
+        handler.removeCallbacks(reconnectRunnable)
+        webSocket?.close(1000, "Stopped by user")
+        webSocket = null
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
     }
 
     private fun connect() {
@@ -261,10 +265,21 @@ class WebSocketService : Service() {
         handler.postDelayed(reconnectRunnable, delayMs)
     }
 
-    private fun startAsForeground() {
+    private fun startAsForeground(): Boolean {
         val notification = buildNotification("Connecting…")
         val type = if (Build.VERSION.SDK_INT >= 29) android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC else 0
-        ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, type)
+        return try {
+            ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, type)
+            true
+        } catch (_: SecurityException) {
+            updateNotification("Foreground service permission/start not allowed")
+            stopSelf()
+            false
+        } catch (_: IllegalStateException) {
+            updateNotification("Foreground service cannot start from the current app state")
+            stopSelf()
+            false
+        }
     }
 
     private fun buildNotification(text: String): Notification = NotificationCompat.Builder(this, CHANNEL_ID).setSmallIcon(android.R.drawable.stat_sys_upload).setContentTitle("Tost connection").setContentText(text).setOngoing(true).setCategory(NotificationCompat.CATEGORY_SERVICE).build()
@@ -272,13 +287,16 @@ class WebSocketService : Service() {
     private fun createNotificationChannel() { if (Build.VERSION.SDK_INT >= 26) getSystemService(NotificationManager::class.java).createNotificationChannel(NotificationChannel(CHANNEL_ID, "Tost connection", NotificationManager.IMPORTANCE_LOW)) }
 
     override fun onTimeout(startId: Int, fgsType: Int) {
-        stopping = true; handler.removeCallbacks(reconnectRunnable); webSocket?.close(1000, "Foreground service timeout"); webSocket = null
-        stopForeground(STOP_FOREGROUND_REMOVE); stopSelf()
+        stopConnectionAndService()
     }
 
     override fun onDestroy() {
-        stopping = true; handler.removeCallbacksAndMessages(null); webSocket?.close(1000, "Service destroyed"); webSocket = null
-        client.dispatcher.executorService.shutdown(); super.onDestroy()
+        stopping = true
+        handler.removeCallbacksAndMessages(null)
+        webSocket?.close(1000, "Service destroyed")
+        webSocket = null
+        client.dispatcher.executorService.shutdown()
+        super.onDestroy()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -291,7 +309,13 @@ class WebSocketService : Service() {
         private const val CHANNEL_ID = "tost_connection"
         private const val NOTIFICATION_ID = 1001
         private const val MAX_POINT_JUMP_METERS = 500.0
-        fun start(context: Context) = ContextCompat.startForegroundService(context, Intent(context, WebSocketService::class.java))
+        fun start(context: Context) = try {
+            ContextCompat.startForegroundService(context, Intent(context, WebSocketService::class.java))
+        } catch (_: SecurityException) {
+            Unit
+        } catch (_: IllegalStateException) {
+            Unit
+        }
         fun stop(context: Context) = context.startService(Intent(context, WebSocketService::class.java).setAction(ACTION_STOP))
     }
 }
