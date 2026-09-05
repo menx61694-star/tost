@@ -110,6 +110,7 @@ class LocationService : Service() {
             .putBoolean(KEY_STEPS_AVAILABLE, hasActivityRecognitionPermission() && stepCounterSensor != null)
             .remove(KEY_ROUTE_LATITUDE)
             .remove(KEY_ROUTE_LONGITUDE)
+            .remove(KEY_LAST_LOCATION_TIME)
             .apply()
         startLocationUpdates()
         startStepCounting(prime = true)
@@ -137,6 +138,7 @@ class LocationService : Service() {
             .putLong(KEY_PAUSED_MS, prefs.getLong(KEY_PAUSED_MS, 0L) + extraPaused)
             .putLong(KEY_PAUSE_STARTED, 0L)
             .putBoolean(KEY_STEP_PRIME, true)
+            .remove(KEY_LAST_LOCATION_TIME)
             .apply()
         startAsForeground()
         startLocationUpdates()
@@ -221,9 +223,15 @@ class LocationService : Service() {
             kotlin.math.abs(location.latitude) <= 90 && kotlin.math.abs(location.longitude) <= 180
         if (!validCoordinates) return
 
-        // Very old cached fixes should not become the current route position.
-        val ageMs = (System.currentTimeMillis() - location.time).coerceAtLeast(0L)
-        if (ageMs > MAX_LOCATION_AGE_MS) return
+        // Reject cached/future/out-of-order fixes before they can affect the route or live state.
+        val now = System.currentTimeMillis()
+        val ageMs = now - location.time
+        if (ageMs > MAX_LOCATION_AGE_MS || ageMs < -MAX_FUTURE_LOCATION_MS) return
+        val previousTimestamp = prefs.getLong(KEY_LAST_LOCATION_TIME, 0L)
+        if (previousTimestamp > 0L && location.time <= previousTimestamp) return
+
+        val accuracy = if (location.hasAccuracy()) location.accuracy else Float.POSITIVE_INFINITY
+        if (!accuracy.isFinite() || accuracy < 0f || accuracy > MAX_ROUTE_ACCURACY_METERS) return
 
         val routeLatitude = prefs.getString(KEY_ROUTE_LATITUDE, null)?.toDoubleOrNull()
         val routeLongitude = prefs.getString(KEY_ROUTE_LONGITUDE, null)?.toDoubleOrNull()
@@ -231,20 +239,18 @@ class LocationService : Service() {
             val results = FloatArray(1)
             Location.distanceBetween(routeLatitude, routeLongitude, location.latitude, location.longitude, results)
             results[0]
-        } else Float.MAX_VALUE
+        } else 0f
 
         val route = try { JSONArray(prefs.getString(KEY_ROUTE, "[]")) } catch (_: Exception) { JSONArray() }
         val farEnough = routeLatitude == null || routeLongitude == null || distanceFromAcceptedPoint >= MIN_ROUTE_DISTANCE_METERS
-        val accuracyGoodEnough = location.hasAccuracy() && location.accuracy >= 0f && location.accuracy <= MAX_ROUTE_ACCURACY_METERS
-        val acceptPoint = accuracyGoodEnough &&
-            (routeLatitude == null || routeLongitude == null || distanceFromAcceptedPoint <= MAX_ROUTE_JUMP_METERS)
+        val jumpAllowed = routeLatitude == null || routeLongitude == null || distanceFromAcceptedPoint <= MAX_ROUTE_JUMP_METERS
 
-        if (acceptPoint && farEnough) {
+        if (farEnough && jumpAllowed) {
             route.put(JSONObject().apply {
                 put("latitude", location.latitude)
                 put("longitude", location.longitude)
                 put("timestamp", location.time)
-                put("accuracyMeters", location.accuracy)
+                put("accuracyMeters", accuracy)
             })
             while (route.length() > MAX_ROUTE_POINTS) route.remove(0)
             prefs.edit()
@@ -254,13 +260,13 @@ class LocationService : Service() {
                 .apply()
         }
 
-        // Keep the latest valid raw fix separately from the route reference point.
-        // A rejected GPS jump/low-accuracy fix cannot poison route-distance comparison.
+        // Only accepted, monotonic, sufficiently accurate fixes become the current live fix.
         prefs.edit()
+            .putLong(KEY_LAST_LOCATION_TIME, location.time)
             .putLong(KEY_TIME, location.time)
             .putString(KEY_LATITUDE, location.latitude.toString())
             .putString(KEY_LONGITUDE, location.longitude.toString())
-            .putFloat(KEY_ACCURACY, location.accuracy)
+            .putFloat(KEY_ACCURACY, accuracy)
             .apply()
     }
 
@@ -276,6 +282,7 @@ class LocationService : Service() {
         prefs.edit()
             .putBoolean(KEY_PAUSED, true)
             .putLong(KEY_PAUSE_STARTED, System.currentTimeMillis())
+            .remove(KEY_LAST_LOCATION_TIME)
             .apply()
         stopStepCounting()
         updateNotification("Location session paused")
@@ -297,6 +304,7 @@ class LocationService : Service() {
             .putBoolean(KEY_ACTIVE, false)
             .putBoolean(KEY_PAUSED, false)
             .putLong(KEY_PAUSE_STARTED, 0L)
+            .remove(KEY_LAST_LOCATION_TIME)
             .apply()
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
@@ -352,6 +360,7 @@ class LocationService : Service() {
         const val KEY_ROUTE = "route"
         const val KEY_ROUTE_LATITUDE = "route_latitude"
         const val KEY_ROUTE_LONGITUDE = "route_longitude"
+        const val KEY_LAST_LOCATION_TIME = "last_location_time"
         const val KEY_SESSION_START = "session_start"
         const val KEY_PAUSED_MS = "paused_ms"
         const val KEY_PAUSE_STARTED = "pause_started"
@@ -369,6 +378,7 @@ class LocationService : Service() {
         private const val MAX_ROUTE_JUMP_METERS = 500f
         private const val MAX_ROUTE_ACCURACY_METERS = 75f
         private const val MAX_LOCATION_AGE_MS = 30_000L
+        private const val MAX_FUTURE_LOCATION_MS = 10_000L
 
         fun start(context: android.content.Context) = ContextCompat.startForegroundService(
             context, Intent(context, LocationService::class.java)
