@@ -18,7 +18,6 @@ data class PermissionEntry(
 )
 
 object PermissionManager {
-    /** Runtime permissions that this bridge can legitimately request from the user. */
     fun runtimeCatalog(): List<PermissionEntry> = buildList {
         add(PermissionEntry("camera", Manifest.permission.CAMERA, "Camera", 1, true, "Camera access"))
         add(PermissionEntry("microphone", Manifest.permission.RECORD_AUDIO, "Microphone", 1, true, "Microphone access"))
@@ -37,19 +36,12 @@ object PermissionManager {
         add(PermissionEntry("media_images", Manifest.permission.READ_MEDIA_IMAGES, "Media", 33, true, "Read shared images"))
         add(PermissionEntry("media_video", Manifest.permission.READ_MEDIA_VIDEO, "Media", 33, true, "Read shared videos"))
         add(PermissionEntry("media_audio", Manifest.permission.READ_MEDIA_AUDIO, "Media", 33, true, "Read shared audio"))
+        if (Build.VERSION.SDK_INT < 33) add(PermissionEntry("media_external", Manifest.permission.READ_EXTERNAL_STORAGE, "Media", 1, true, "Read shared media on Android 12 and lower"))
     }
 
-    /** Runtime permissions that can be passed to Android's permission launcher. */
-    fun runtimePermissions(): Array<String> = runtimeCatalog()
-        .filter { it.requestable && Build.VERSION.SDK_INT >= it.minApi && it.permission != null }
-        .mapNotNull { it.permission }
-        .toTypedArray()
+    fun runtimePermissions(): Array<String> = runtimeCatalog().filter { it.requestable && Build.VERSION.SDK_INT >= it.minApi && it.permission != null }.mapNotNull { it.permission }.toTypedArray()
+    fun missingPermissions(context: Context): Array<String> = runtimePermissions().filter { ContextCompat.checkSelfPermission(context, it) != PackageManager.PERMISSION_GRANTED }.toTypedArray()
 
-    fun missingPermissions(context: Context): Array<String> = runtimePermissions()
-        .filter { ContextCompat.checkSelfPermission(context, it) != PackageManager.PERMISSION_GRANTED }
-        .toTypedArray()
-
-    /** Permissions that are intentionally not included in the ordinary runtime request flow. */
     fun restrictedCatalog(): List<PermissionEntry> = buildList {
         add(PermissionEntry("read_sms", Manifest.permission.READ_SMS, "Restricted", 1, false, "Read SMS messages — restricted / policy controlled"))
         add(PermissionEntry("send_sms", Manifest.permission.SEND_SMS, "Restricted", 1, false, "Send SMS messages — restricted / policy controlled"))
@@ -57,17 +49,11 @@ object PermissionManager {
         add(PermissionEntry("write_call_log", Manifest.permission.WRITE_CALL_LOG, "Restricted", 1, false, "Write call log — restricted / policy controlled"))
     }
 
-    /**
-     * Permissions that need a Settings-based special-access flow rather than a runtime dialog.
-     * These are exposed as a catalog only; the app does not silently open Settings.
-     */
     fun specialAccessCatalog(): List<PermissionEntry> = buildList {
         add(PermissionEntry("overlay", Manifest.permission.SYSTEM_ALERT_WINDOW, "Special access", 23, false, "Display over other apps"))
         add(PermissionEntry("exact_alarm", Manifest.permission.SCHEDULE_EXACT_ALARM, "Special access", 31, false, "Schedule exact alarms"))
         add(PermissionEntry("ignore_battery_optimizations", Manifest.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, "Special access", 23, false, "Request exemption from battery optimizations"))
-        if (Build.VERSION.SDK_INT >= 30) {
-            add(PermissionEntry("manage_external_storage", Manifest.permission.MANAGE_EXTERNAL_STORAGE, "Special access", 30, false, "Broad shared-storage access"))
-        }
+        if (Build.VERSION.SDK_INT >= 30) add(PermissionEntry("manage_external_storage", Manifest.permission.MANAGE_EXTERNAL_STORAGE, "Special access", 30, false, "Broad shared-storage access"))
     }
 
     fun isSpecialAccessGranted(context: Context, id: String): Boolean = when (id) {
