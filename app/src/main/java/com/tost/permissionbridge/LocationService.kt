@@ -245,7 +245,11 @@ class LocationService : Service() {
         val farEnough = routeLatitude == null || routeLongitude == null || distanceFromAcceptedPoint >= MIN_ROUTE_DISTANCE_METERS
         val jumpAllowed = routeLatitude == null || routeLongitude == null || distanceFromAcceptedPoint <= MAX_ROUTE_JUMP_METERS
 
-        if (farEnough && jumpAllowed) {
+        // A jump over 500 m between accepted fixes is implausible for a running/walking session.
+        // Reject it from live state as well as the route, while preserving the previous good fix.
+        if (!jumpAllowed) return
+
+        if (farEnough) {
             route.put(JSONObject().apply {
                 put("latitude", location.latitude)
                 put("longitude", location.longitude)
