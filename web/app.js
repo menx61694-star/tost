@@ -76,6 +76,9 @@ function connectLive() {
       render();
     } else if (message.type === "command_result") {
       const result = message.result || {};
+      if (result.imageBase64) {
+        window.dispatchEvent(new CustomEvent("tost-media-frame", { detail: { id: message.id, deviceId: message.deviceId, result } }));
+      }
       if (result.ok && result.locationSessionActive !== undefined) {
         liveStates.set(message.deviceId, result);
         renderLiveStatus(message.deviceId, result);
@@ -87,6 +90,7 @@ function connectLive() {
       if (result.ok && Array.isArray(result.workouts)) renderHistory(message.deviceId, result.workouts);
       if (result.ok && result.workout) showWorkout(message.deviceId, result.workout);
       if (result.ok && result.silent) return;
+      if (result.imageBase64) return;
       showMessage(`Command result: ${result.ok ? formatResult(result) : (result.error || "Command failed")}`);
     }
   };
@@ -210,7 +214,7 @@ function renderLiveStatus(deviceId, result) {
   if (result.latitude !== undefined && result.longitude !== undefined) {
     const location = document.createElement("small");
     location.className = "live-location";
-    const age = result.locationTimestamp ? Math.max(0, Math.round((Date.now() - result.locationTimestamp) / 1000)) : null;
+    const age = result.timestamp ? Math.max(0, Math.round((Date.now() - result.timestamp) / 1000)) : null;
     location.textContent = `GPS ${Number(result.latitude).toFixed(6)}, ${Number(result.longitude).toFixed(6)} · accuracy ${formatAccuracy(result.accuracyMeters)}${age === null ? "" : ` · ${age}s old`}`;
     host.appendChild(location);
   }
