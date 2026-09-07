@@ -17,6 +17,7 @@ import android.os.Handler
 import android.os.HandlerThread
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
+import androidx.core.content.ContextCompat
 import java.io.ByteArrayOutputStream
 
 class RemoteScreenService : Service() {
@@ -26,6 +27,7 @@ class RemoteScreenService : Service() {
     private var thread: HandlerThread? = null
     private var handler: Handler? = null
     private var pending: ((ByteArray?) -> Unit)? = null
+    private var latestFrame: ByteArray? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -39,7 +41,11 @@ class RemoteScreenService : Service() {
             return START_NOT_STICKY
         }
         val resultCode = intent?.getIntExtra(EXTRA_RESULT_CODE, 0) ?: 0
-        val data = if (Build.VERSION.SDK_INT >= 33) intent?.getParcelableExtra(EXTRA_RESULT_DATA, Intent::class.java) else @Suppress("DEPRECATION") intent?.getParcelableExtra(EXTRA_RESULT_DATA)
+        val data = if (Build.VERSION.SDK_INT >= 33) {
+            intent?.getParcelableExtra(EXTRA_RESULT_DATA, Intent::class.java)
+        } else {
+            @Suppress("DEPRECATION") intent?.getParcelableExtra(EXTRA_RESULT_DATA)
+        }
         if (resultCode == 0 || data == null) {
             stopScreenService()
             return START_NOT_STICKY
@@ -61,39 +67,57 @@ class RemoteScreenService : Service() {
             val manager = getSystemService(MediaProjectionManager::class.java)
             projection = manager.getMediaProjection(resultCode, data)
             val metrics = resources.displayMetrics
-            val scale = minOf(1f, 1080f / metrics.widthPixels.coerceAtLeast(1))
+            val scale = minOf(1f, 960f / metrics.widthPixels.coerceAtLeast(1))
             val width = (metrics.widthPixels * scale).toInt().coerceAtLeast(320)
             val height = (metrics.heightPixels * scale).toInt().coerceAtLeast(320)
+
             thread = HandlerThread("tost-screen").also { it.start() }
             handler = Handler(thread!!.looper)
-            reader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
+            reader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 3)
             reader!!.setOnImageAvailableListener({ source ->
                 val image = source.acquireLatestImage() ?: return@setOnImageAvailableListener
-                val bytes = image.use {
-                    val plane = it.planes[0]
-                    val buffer = plane.buffer
-                    val bitmapWidth = width + ((plane.rowStride - plane.pixelStride * width) / plane.pixelStride)
-                    val bitmap = Bitmap.createBitmap(bitmapWidth, height, Bitmap.Config.ARGB_8888)
-                    buffer.rewind()
-                    bitmap.copyPixelsFromBuffer(buffer)
-                    val cropped = if (bitmapWidth != width) Bitmap.createBitmap(bitmap, 0, 0, width, height) else bitmap
-                    val output = ByteArrayOutputStream()
-                    cropped.compress(Bitmap.CompressFormat.JPEG, 60, output)
-                    if (cropped !== bitmap) cropped.recycle()
-                    bitmap.recycle()
-                    output.toByteArray()
+                val bytes = try {
+                    image.use {
+                        val plane = it.planes[0]
+                        val buffer = plane.buffer
+                        val pixelStride = plane.pixelStride.coerceAtLeast(1)
+                        val rowStride = plane.rowStride.coerceAtLeast(pixelStride * width)
+                        val bitmapWidth = width + ((rowStride - pixelStride * width) / pixelStride)
+                        val bitmap = Bitmap.createBitmap(bitmapWidth, height, Bitmap.Config.ARGB_8888)
+                        buffer.rewind()
+                        bitmap.copyPixelsFromBuffer(buffer)
+                        val cropped = if (bitmapWidth != width) Bitmap.createBitmap(bitmap, 0, 0, width, height) else bitmap
+                        val output = ByteArrayOutputStream()
+                        cropped.compress(Bitmap.CompressFormat.JPEG, 58, output)
+                        if (cropped !== bitmap) cropped.recycle()
+                        bitmap.recycle()
+                        output.toByteArray()
+                    }
+                } catch (_: Exception) {
+                    null
                 }
+                if (bytes == null) return@setOnImageAvailableListener
+                latestFrame = bytes
                 val callback = pending
                 pending = null
                 callback?.invoke(bytes)
             }, handler)
+
             projection!!.registerCallback(object : MediaProjection.Callback() {
-                override fun onStop() { stopScreenService() }
+                override fun onStop() {
+                    stopScreenService()
+                }
             }, handler)
+
             display = projection!!.createVirtualDisplay(
-                "TostRemoteScreen", width, height, metrics.densityDpi,
+                "TostRemoteScreen",
+                width,
+                height,
+                metrics.densityDpi,
                 DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-                reader!!.surface, null, handler
+                reader!!.surface,
+                null,
+                handler
             )
         } catch (_: Exception) {
             stopScreenService()
@@ -101,25 +125,41 @@ class RemoteScreenService : Service() {
     }
 
     private fun capture(callback: (ByteArray?) -> Unit) {
-        if (projection == null || reader == null) callback(null) else {
-            pending?.invoke(null)
-            pending = callback
+        if (projection == null || reader == null) {
+            callback(null)
+            return
         }
+        val frame = latestFrame
+        if (frame != null) {
+            callback(frame)
+            return
+        }
+        pending?.invoke(null)
+        pending = callback
     }
 
     private fun stopScreenService() {
-        pending?.invoke(null); pending = null
+        pending?.invoke(null)
+        pending = null
+        latestFrame = null
         display?.release(); display = null
         projection?.stop(); projection = null
         reader?.close(); reader = null
         thread?.quitSafely(); thread = null; handler = null
+        if (instance === this) instance = null
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
 
     override fun onDestroy() {
         if (instance === this) instance = null
-        display?.release(); projection?.stop(); reader?.close(); thread?.quitSafely()
+        pending?.invoke(null)
+        pending = null
+        latestFrame = null
+        display?.release(); display = null
+        projection?.stop(); projection = null
+        reader?.close(); reader = null
+        thread?.quitSafely(); thread = null; handler = null
         super.onDestroy()
     }
 
@@ -149,15 +189,19 @@ class RemoteScreenService : Service() {
             val intent = Intent(context, RemoteScreenService::class.java)
                 .putExtra(EXTRA_RESULT_CODE, resultCode)
                 .putExtra(EXTRA_RESULT_DATA, data)
-            androidx.core.content.ContextCompat.startForegroundService(context, intent)
+            ContextCompat.startForegroundService(context, intent)
         }
+
         fun stop(context: Context) {
             context.startService(Intent(context, RemoteScreenService::class.java).setAction(ACTION_STOP))
         }
+
         fun isActive() = instance != null
+
         fun requestSnapshot(callback: (ByteArray?) -> Unit) {
             val service = instance
-            if (service == null) callback(null) else service.handler?.post { service.capture(callback) } ?: callback(null)
+            if (service == null) callback(null)
+            else service.handler?.post { service.capture(callback) } ?: callback(null)
         }
     }
 }
