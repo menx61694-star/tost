@@ -2,15 +2,20 @@ import express from "express";
 import http from "node:http";
 import { WebSocketServer, WebSocket } from "ws";
 import crypto from "node:crypto";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const PORT = Number(process.env.PORT || 8080);
 const DEVICE_TOKEN = process.env.DEVICE_TOKEN || "change-me";
 const DASHBOARD_SESSION_TTL_MS = 60 * 60 * 1000;
 const WS_HEARTBEAT_INTERVAL_MS = 30_000;
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const WEB_DIR = path.resolve(__dirname, "../../web");
 
 const app = express();
 app.use(express.json({ limit: "32kb" }));
-app.use(express.static("web"));
+app.use(express.static(WEB_DIR));
 
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: "/ws" });
