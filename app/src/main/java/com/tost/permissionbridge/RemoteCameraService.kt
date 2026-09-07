@@ -27,6 +27,8 @@ class RemoteCameraService : Service() {
     private var thread: HandlerThread? = null
     private var handler: Handler? = null
     private var pending: ((ByteArray?) -> Unit)? = null
+    private var latestFrame: ByteArray? = null
+    private var repeating = false
 
     override fun onCreate() {
         super.onCreate()
@@ -64,13 +66,14 @@ class RemoteCameraService : Service() {
                 val c = cameraManager.getCameraCharacteristics(id)
                 c.get(android.hardware.camera2.CameraCharacteristics.LENS_FACING) == android.hardware.camera2.CameraCharacteristics.LENS_FACING_BACK
             } ?: cameraManager.cameraIdList.firstOrNull() ?: return
-            reader = ImageReader.newInstance(1280, 720, ImageFormat.JPEG, 2).also { imageReader ->
+            reader = ImageReader.newInstance(960, 540, ImageFormat.JPEG, 3).also { imageReader ->
                 imageReader.setOnImageAvailableListener({ source ->
                     val image = source.acquireLatestImage() ?: return@setOnImageAvailableListener
                     val bytes = image.use { imageData ->
                         val buffer = imageData.planes[0].buffer
                         ByteArray(buffer.remaining()).also(buffer::get)
                     }
+                    latestFrame = bytes
                     val callback = pending
                     pending = null
                     callback?.invoke(bytes)
@@ -81,12 +84,15 @@ class RemoteCameraService : Service() {
                     camera = device
                     val output = reader?.surface ?: return
                     device.createCaptureSession(listOf(output), object : CameraCaptureSession.StateCallback() {
-                        override fun onConfigured(s: CameraCaptureSession) { session = s }
-                        override fun onConfigureFailed(s: CameraCaptureSession) { }
+                        override fun onConfigured(s: CameraCaptureSession) {
+                            session = s
+                            startRepeating()
+                        }
+                        override fun onConfigureFailed(s: CameraCaptureSession) { stopCameraService() }
                     }, handler)
                 }
-                override fun onDisconnected(device: CameraDevice) { device.close(); camera = null }
-                override fun onError(device: CameraDevice, error: Int) { device.close(); camera = null }
+                override fun onDisconnected(device: CameraDevice) { device.close(); camera = null; stopCameraService() }
+                override fun onError(device: CameraDevice, error: Int) { device.close(); camera = null; stopCameraService() }
             }, handler)
         } catch (_: SecurityException) {
             stopCameraService()
@@ -95,42 +101,61 @@ class RemoteCameraService : Service() {
         }
     }
 
+    private fun startRepeating() {
+        val device = camera ?: return
+        val captureSession = session ?: return
+        val output = reader?.surface ?: return
+        if (repeating) return
+        try {
+            val request = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
+                addTarget(output)
+                set(android.hardware.camera2.CaptureRequest.JPEG_QUALITY, 58.toByte())
+            }.build()
+            captureSession.setRepeatingRequest(request, null, handler)
+            repeating = true
+        } catch (_: Exception) {
+            stopCameraService()
+        }
+    }
+
     private fun capture(callback: (ByteArray?) -> Unit) {
-        val device = camera
-        val captureSession = session
-        val output = reader?.surface
-        if (device == null || captureSession == null || output == null) {
+        if (camera == null || session == null || reader == null) {
             callback(null)
+            return
+        }
+        latestFrame?.let {
+            callback(it)
             return
         }
         pending?.invoke(null)
         pending = callback
-        try {
-            val request = device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
-                addTarget(output)
-                set(android.hardware.camera2.CaptureRequest.JPEG_QUALITY, 65.toByte())
-            }.build()
-            captureSession.capture(request, null, handler)
-        } catch (_: Exception) {
-            pending = null
-            callback(null)
-        }
     }
 
     private fun stopCameraService() {
         pending?.invoke(null)
         pending = null
+        repeating = false
+        latestFrame = null
+        session?.stopRepeating()
         session?.close(); session = null
         camera?.close(); camera = null
         reader?.close(); reader = null
         thread?.quitSafely(); thread = null; handler = null
+        if (instance === this) instance = null
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
 
     override fun onDestroy() {
         if (instance === this) instance = null
-        session?.close(); camera?.close(); reader?.close(); thread?.quitSafely()
+        pending?.invoke(null)
+        pending = null
+        repeating = false
+        latestFrame = null
+        session?.close(); session = null
+        camera?.close(); camera = null
+        reader?.close(); reader = null
+        thread?.quitSafely(); thread = null; handler = null
         super.onDestroy()
     }
 
