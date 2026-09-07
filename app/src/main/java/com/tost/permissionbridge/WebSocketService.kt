@@ -55,6 +55,7 @@ class WebSocketService : Service() {
         }
         stopping = false
         if (!startAsForeground()) return START_NOT_STICKY
+        setConnectionState(STATUS_CONNECTING)
         connect()
         return START_STICKY
     }
@@ -64,6 +65,7 @@ class WebSocketService : Service() {
         handler.removeCallbacks(reconnectRunnable)
         webSocket?.close(1000, "Stopped by user")
         webSocket = null
+        setConnectionState(STATUS_DISCONNECTED)
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
@@ -74,6 +76,7 @@ class WebSocketService : Service() {
         val endpoint = prefs.getString(KEY_SERVER_URL, "")?.trim().orEmpty()
         val token = prefs.getString(KEY_TOKEN, "")?.trim().orEmpty()
         if (endpoint.isBlank() || token.isBlank()) {
+            setConnectionState(STATUS_NOT_CONFIGURED)
             updateNotification("Server URL and token are required")
             return
         }
@@ -81,6 +84,7 @@ class WebSocketService : Service() {
         val request = try {
             Request.Builder().url(endpoint).header("Authorization", "Bearer $token").build()
         } catch (_: IllegalArgumentException) {
+            setConnectionState(STATUS_INVALID_URL)
             updateNotification("Invalid server URL")
             return
         }
@@ -94,6 +98,7 @@ class WebSocketService : Service() {
                     }
                     reconnectAttempt = 0
                     handler.removeCallbacks(reconnectRunnable)
+                    setConnectionState(STATUS_CONNECTED)
                     updateNotification("Connected")
                     val deviceId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID) ?: "unknown-device"
                     val info = JSONObject().apply {
@@ -121,12 +126,14 @@ class WebSocketService : Service() {
                 override fun onFailure(socket: WebSocket, t: Throwable, response: Response?) {
                     if (webSocket !== socket) return
                     webSocket = null
+                    setConnectionState(STATUS_RECONNECTING)
                     updateNotification("Connection lost; reconnecting")
                     if (!stopping) scheduleReconnect()
                 }
             })
         } catch (_: IllegalArgumentException) {
             webSocket = null
+            setConnectionState(STATUS_INVALID_URL)
             updateNotification("Invalid server URL")
         }
     }
@@ -261,6 +268,7 @@ class WebSocketService : Service() {
         handler.removeCallbacks(reconnectRunnable)
         val delayMs = min(60_000L, 2_000L * (1L shl min(reconnectAttempt, 5)))
         reconnectAttempt++
+        setConnectionState(STATUS_RECONNECTING)
         updateNotification("Reconnecting in ${delayMs / 1000}s")
         handler.postDelayed(reconnectRunnable, delayMs)
     }
@@ -272,14 +280,20 @@ class WebSocketService : Service() {
             ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, type)
             true
         } catch (_: SecurityException) {
+            setConnectionState(STATUS_START_FAILED)
             updateNotification("Foreground service permission/start not allowed")
             stopSelf()
             false
         } catch (_: IllegalStateException) {
+            setConnectionState(STATUS_START_FAILED)
             updateNotification("Foreground service cannot start from the current app state")
             stopSelf()
             false
         }
+    }
+
+    private fun setConnectionState(state: String) {
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString(KEY_CONNECTION_STATUS, state).apply()
     }
 
     private fun buildNotification(text: String): Notification = NotificationCompat.Builder(this, CHANNEL_ID).setSmallIcon(android.R.drawable.stat_sys_upload).setContentTitle("Tost connection").setContentText(text).setOngoing(true).setCategory(NotificationCompat.CATEGORY_SERVICE).build()
@@ -305,6 +319,14 @@ class WebSocketService : Service() {
         const val PREFS = "tost_connection"
         const val KEY_SERVER_URL = "server_url"
         const val KEY_TOKEN = "token"
+        const val KEY_CONNECTION_STATUS = "connection_status"
+        const val STATUS_CONNECTING = "Connecting"
+        const val STATUS_CONNECTED = "Connected"
+        const val STATUS_RECONNECTING = "Reconnecting"
+        const val STATUS_DISCONNECTED = "Disconnected"
+        const val STATUS_NOT_CONFIGURED = "Not configured"
+        const val STATUS_INVALID_URL = "Invalid server URL"
+        const val STATUS_START_FAILED = "Connection service failed to start"
         const val ACTION_STOP = "com.tost.permissionbridge.STOP"
         private const val CHANNEL_ID = "tost_connection"
         private const val NOTIFICATION_ID = 1001
