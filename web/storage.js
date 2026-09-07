@@ -3,8 +3,9 @@ storagePanel.className = "panel storage-panel";
 storagePanel.innerHTML = `
   <div class="panel-heading">
     <div>
-      <h2>Storage diagnostics</h2>
-      <small>Check available device storage without reading personal files.</small>
+      <div class="eyebrow">DEVICE STORAGE</div>
+      <h2>Storage overview</h2>
+      <small>Shows space usage without exposing personal file names or contents.</small>
     </div>
     <button id="refresh-storage" type="button">Refresh</button>
   </div>
@@ -37,36 +38,43 @@ async function loadStorageDevices() {
     const list = await response.json();
     host.innerHTML = "";
     if (!list.length) {
-      host.innerHTML = "<small>No devices connected.</small>";
+      host.innerHTML = "<div class=\"empty-state\">No devices connected.</div>";
       return;
     }
 
     for (const device of list) {
-      const row = document.createElement("div");
-      row.className = "storage-device";
+      const card = document.createElement("div");
+      card.className = "storage-device-card";
 
+      const top = document.createElement("div");
+      top.className = "storage-device-top";
       const info = document.createElement("div");
       const name = document.createElement("strong");
       name.textContent = device.info?.model
         ? `${device.info.manufacturer || ""} ${device.info.model}`.trim()
         : device.deviceId;
       const result = document.createElement("small");
-      result.textContent = device.status === "online" ? "Ready" : "Offline";
+      result.textContent = device.status === "online" ? "Online · ready" : "Offline";
       info.append(name, result);
-
-      const value = document.createElement("div");
-      value.className = "storage-value";
-      value.textContent = "—";
-
       const button = document.createElement("button");
-      button.textContent = "Check storage";
+      button.textContent = "Scan storage";
       button.disabled = device.status !== "online";
+      top.append(info, button);
+
+      const body = document.createElement("div");
+      body.className = "storage-overview";
+      body.innerHTML = `<div class="storage-ring"><span>—</span></div><div class="storage-numbers"><strong>Storage not scanned</strong><small>Press Scan storage to read total, used and free space.</small></div>`;
+
+      const meta = document.createElement("div");
+      meta.className = "storage-meta";
+      meta.innerHTML = `<span>Used <b>—</b></span><span>Free <b>—</b></span><span>Total <b>—</b></span>`;
+
       button.onclick = async () => {
         button.disabled = true;
         result.textContent = "Reading storage…";
         try {
           const data = await requestStorage(device.deviceId);
-          value.textContent = formatStorageResult(data);
+          renderStorageResult(body, meta, data);
           result.textContent = "Updated just now";
         } catch (error) {
           result.textContent = error.message;
@@ -75,12 +83,32 @@ async function loadStorageDevices() {
         }
       };
 
-      row.append(info, value, button);
-      host.appendChild(row);
+      card.append(top, body, meta);
+      host.appendChild(card);
     }
   } catch (error) {
-    host.textContent = error.message;
+    host.innerHTML = `<div class="empty-state">${escapeStorageText(error.message)}</div>`;
   }
+}
+
+function renderStorageResult(body, meta, data) {
+  const total = Number(data.totalBytes);
+  const free = Number(data.freeBytes);
+  const used = Number(data.usedBytes);
+  if (![total, free, used].every(Number.isFinite) || total < 0 || free < 0 || used < 0 || used > total) {
+    body.innerHTML = `<div class="storage-numbers"><strong>Storage data unavailable</strong></div>`;
+    return;
+  }
+  const percent = total > 0 ? Math.min(100, Math.round((used / total) * 100)) : 0;
+  body.innerHTML = `<div class="storage-ring" style="--storage-percent:${percent}%"><span>${percent}%</span></div><div class="storage-numbers"><strong>${formatBytes(used)} used</strong><small>${formatBytes(free)} free of ${formatBytes(total)} total</small><div class="storage-bar"><i style="width:${percent}%"></i></div></div>`;
+  const values = meta.querySelectorAll("b");
+  values[0].textContent = formatBytes(used);
+  values[1].textContent = formatBytes(free);
+  values[2].textContent = formatBytes(total);
+}
+
+function escapeStorageText(value) {
+  return String(value).replace(/[&<>\"]/g, character => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;" }[character]));
 }
 
 $("refresh-storage").onclick = loadStorageDevices;
@@ -90,17 +118,6 @@ $("connect").onclick = async event => {
   await originalConnect(event);
   await loadStorageDevices();
 };
-
-function formatStorageResult(data) {
-  const total = Number(data.totalBytes);
-  const free = Number(data.freeBytes);
-  const used = Number(data.usedBytes);
-  if (![total, free, used].every(Number.isFinite) || total < 0 || free < 0 || used < 0 || used > total) {
-    return "Storage data unavailable";
-  }
-  const percent = total > 0 ? Math.round((used / total) * 100) : 0;
-  return `${formatBytes(used)} used / ${formatBytes(total)} total · ${formatBytes(free)} free · ${percent}% used`;
-}
 
 function formatBytes(value) {
   if (value < 1024) return `${Math.round(value)} B`;
