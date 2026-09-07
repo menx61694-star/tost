@@ -36,6 +36,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var permissionContainer: LinearLayout
     private lateinit var serverUrl: EditText
     private lateinit var token: EditText
+    private lateinit var connectionStatus: TextView
     private lateinit var locationStatus: TextView
     private lateinit var locationStartButton: Button
     private lateinit var locationPauseButton: Button
@@ -54,6 +55,10 @@ class MainActivity : AppCompatActivity() {
             setText(prefs.getString(WebSocketService.KEY_TOKEN, ""))
             inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
         }
+        connectionStatus = TextView(this).apply {
+            textSize = 16f
+            setPadding(0, 8, 0, 8)
+        }
 
         val connectButton = Button(this).apply {
             text = "Save & connect to server"
@@ -63,11 +68,15 @@ class MainActivity : AppCompatActivity() {
                     .putString(WebSocketService.KEY_TOKEN, token.text.toString().trim())
                     .apply()
                 WebSocketService.start(this@MainActivity)
+                window.decorView.postDelayed(::updateConnectionStatus, 150)
             }
         }
         val stopButton = Button(this).apply {
             text = "Disconnect"
-            setOnClickListener { WebSocketService.stop(this@MainActivity) }
+            setOnClickListener {
+                WebSocketService.stop(this@MainActivity)
+                window.decorView.postDelayed(::updateConnectionStatus, 150)
+            }
         }
 
         locationStatus = TextView(this).apply { textSize = 15f; setPadding(0, 4, 0, 8) }
@@ -99,7 +108,7 @@ class MainActivity : AppCompatActivity() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(24, 24, 24, 24)
-            addView(serverUrl); addView(token); addView(connectButton); addView(stopButton)
+            addView(serverUrl); addView(token); addView(connectionStatus); addView(connectButton); addView(stopButton)
             addView(TextView(this@MainActivity).apply { text = "Location & steps session"; textSize = 20f; setPadding(0, 24, 0, 8) })
             addView(locationStatus); addView(locationControls)
             addView(TextView(this@MainActivity).apply {
@@ -111,12 +120,19 @@ class MainActivity : AppCompatActivity() {
         }
 
         setContentView(ScrollView(this).apply { addView(root) })
-        renderPermissions(); updateLocationControls()
+        renderPermissions(); updateLocationControls(); updateConnectionStatus()
     }
 
     override fun onResume() {
         super.onResume()
-        if (::permissionContainer.isInitialized) { renderPermissions(); updateLocationControls() }
+        if (::permissionContainer.isInitialized) { renderPermissions(); updateLocationControls(); updateConnectionStatus() }
+    }
+
+    private fun updateConnectionStatus() {
+        if (!::connectionStatus.isInitialized) return
+        val prefs = getSharedPreferences(WebSocketService.PREFS, MODE_PRIVATE)
+        val state = prefs.getString(WebSocketService.KEY_CONNECTION_STATUS, WebSocketService.STATUS_DISCONNECTED).orEmpty()
+        connectionStatus.text = "Server connection: $state"
     }
 
     private fun startLocationSession() {
