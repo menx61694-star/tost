@@ -1,8 +1,10 @@
 package com.tost.permissionbridge
 
 import android.Manifest
+import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -25,11 +27,26 @@ class MainActivity : AppCompatActivity() {
     ) { granted ->
         renderPermissions()
         updateLocationControls()
-
+        updateRemoteAccessControls()
         if (pendingLocationStart) {
             pendingLocationStart = false
             if (granted) startLocationSession()
             else locationStatus.text = "Permission denied — session not started"
+        }
+    }
+
+    private val screenCaptureLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK && result.data != null) {
+            try {
+                RemoteScreenService.start(this, result.resultCode, result.data!!)
+                window.decorView.postDelayed(::updateRemoteAccessControls, 300)
+            } catch (_: Exception) {
+                screenStatus.text = "Screen sharing could not start"
+            }
+        } else {
+            screenStatus.text = "Screen sharing permission was cancelled"
         }
     }
 
@@ -41,6 +58,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var locationStartButton: Button
     private lateinit var locationPauseButton: Button
     private lateinit var locationStopButton: Button
+    private lateinit var cameraStatus: TextView
+    private lateinit var cameraButton: Button
+    private lateinit var screenStatus: TextView
+    private lateinit var screenButton: Button
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -55,10 +76,7 @@ class MainActivity : AppCompatActivity() {
             setText(prefs.getString(WebSocketService.KEY_TOKEN, ""))
             inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
         }
-        connectionStatus = TextView(this).apply {
-            textSize = 16f
-            setPadding(0, 8, 0, 8)
-        }
+        connectionStatus = TextView(this).apply { textSize = 16f; setPadding(0, 8, 0, 8) }
 
         val connectButton = Button(this).apply {
             text = "Save & connect to server"
@@ -97,12 +115,43 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        cameraStatus = TextView(this).apply { textSize = 15f; setPadding(0, 4, 0, 8) }
+        cameraButton = Button(this).apply {
+            text = "Enable remote camera"
+            setOnClickListener {
+                if (RemoteCameraService.isActive()) RemoteCameraService.stop(this@MainActivity)
+                else if (ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+                    try { RemoteCameraService.start(this@MainActivity) } catch (_: Exception) { cameraStatus.text = "Camera service could not start" }
+                } else singlePermissionLauncher.launch(Manifest.permission.CAMERA)
+                window.decorView.postDelayed(::updateRemoteAccessControls, 300)
+            }
+        }
+
+        screenStatus = TextView(this).apply { textSize = 15f; setPadding(0, 4, 0, 8) }
+        screenButton = Button(this).apply {
+            text = "Enable screen sharing"
+            setOnClickListener {
+                if (RemoteScreenService.isActive()) {
+                    RemoteScreenService.stop(this@MainActivity)
+                    window.decorView.postDelayed(::updateRemoteAccessControls, 300)
+                } else {
+                    val manager = getSystemService(MediaProjectionManager::class.java)
+                    screenCaptureLauncher.launch(manager.createScreenCaptureIntent())
+                }
+            }
+        }
+
         permissionContainer = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val locationControls = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             addView(locationStartButton, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             addView(locationPauseButton, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             addView(locationStopButton, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        }
+
+        val remoteControls = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(cameraStatus); addView(cameraButton); addView(screenStatus); addView(screenButton)
         }
 
         val root = LinearLayout(this).apply {
@@ -115,17 +164,25 @@ class MainActivity : AppCompatActivity() {
                 text = "Location and step counting are user-started. Pause stops GPS and step updates without ending the session; Resume continues the same workout. Stop ends the session. Step counting requires Activity recognition on Android 10+ and a device step-counter sensor."
                 setPadding(0, 8, 0, 8)
             })
+            addView(TextView(this@MainActivity).apply { text = "Remote access"; textSize = 20f; setPadding(0, 24, 0, 8) })
+            addView(remoteControls)
+            addView(TextView(this@MainActivity).apply {
+                text = "Camera and screen sharing are explicit user-started modes. Android shows its privacy indicators/notification while they are active. The web dashboard can request snapshots only while the corresponding mode is enabled."
+                setPadding(0, 8, 0, 8)
+            })
             addView(TextView(this@MainActivity).apply { text = "Permissions"; textSize = 20f; setPadding(0, 24, 0, 8) })
             addView(permissionContainer)
         }
 
         setContentView(ScrollView(this).apply { addView(root) })
-        renderPermissions(); updateLocationControls(); updateConnectionStatus()
+        renderPermissions(); updateLocationControls(); updateConnectionStatus(); updateRemoteAccessControls()
     }
 
     override fun onResume() {
         super.onResume()
-        if (::permissionContainer.isInitialized) { renderPermissions(); updateLocationControls(); updateConnectionStatus() }
+        if (::permissionContainer.isInitialized) {
+            renderPermissions(); updateLocationControls(); updateConnectionStatus(); updateRemoteAccessControls()
+        }
     }
 
     private fun updateConnectionStatus() {
@@ -133,6 +190,22 @@ class MainActivity : AppCompatActivity() {
         val prefs = getSharedPreferences(WebSocketService.PREFS, MODE_PRIVATE)
         val state = prefs.getString(WebSocketService.KEY_CONNECTION_STATUS, WebSocketService.STATUS_DISCONNECTED).orEmpty()
         connectionStatus.text = "Server connection: $state"
+    }
+
+    private fun updateRemoteAccessControls() {
+        if (!::cameraStatus.isInitialized) return
+        val cameraGranted = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+        val cameraActive = RemoteCameraService.isActive()
+        cameraStatus.text = when {
+            !cameraGranted -> "Camera: permission required"
+            cameraActive -> "Camera: remote access active"
+            else -> "Camera: off"
+        }
+        cameraButton.text = if (cameraActive) "Disable remote camera" else if (cameraGranted) "Enable remote camera" else "Grant camera & enable"
+
+        val screenActive = RemoteScreenService.isActive()
+        screenStatus.text = if (screenActive) "Screen: remote sharing active" else "Screen: off"
+        screenButton.text = if (screenActive) "Disable screen sharing" else "Enable screen sharing"
     }
 
     private fun startLocationSession() {
