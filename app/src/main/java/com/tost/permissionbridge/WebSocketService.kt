@@ -43,28 +43,16 @@ class WebSocketService : Service() {
     private var stopping = false
 
     override fun onCreate() { super.onCreate(); createNotificationChannel() }
-
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) { stopConnectionAndService(); return START_NOT_STICKY }
-        stopping = false
-        if (!startAsForeground()) return START_NOT_STICKY
-        setConnectionState(STATUS_CONNECTING); connect(); return START_STICKY
+        stopping = false; if (!startAsForeground()) return START_NOT_STICKY; setConnectionState(STATUS_CONNECTING); connect(); return START_STICKY
     }
-
-    private fun stopConnectionAndService() {
-        stopping = true; handler.removeCallbacks(reconnectRunnable); webSocket?.close(1000, "Stopped by user"); webSocket = null
-        setConnectionState(STATUS_DISCONNECTED); stopForeground(STOP_FOREGROUND_REMOVE); stopSelf()
-    }
-
+    private fun stopConnectionAndService() { stopping = true; handler.removeCallbacks(reconnectRunnable); webSocket?.close(1000, "Stopped by user"); webSocket = null; setConnectionState(STATUS_DISCONNECTED); stopForeground(STOP_FOREGROUND_REMOVE); stopSelf() }
     private fun connect() {
         if (stopping || webSocket != null) return
-        val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
-        val endpoint = prefs.getString(KEY_SERVER_URL, "")?.trim().orEmpty()
-        val token = prefs.getString(KEY_TOKEN, "")?.trim().orEmpty()
+        val prefs = getSharedPreferences(PREFS, MODE_PRIVATE); val endpoint = prefs.getString(KEY_SERVER_URL, "")?.trim().orEmpty(); val token = prefs.getString(KEY_TOKEN, "")?.trim().orEmpty()
         if (endpoint.isBlank() || token.isBlank()) { setConnectionState(STATUS_NOT_CONFIGURED); updateNotification("Server URL and token are required"); return }
-        val request = try { Request.Builder().url(endpoint).header("Authorization", "Bearer $token").build() } catch (_: IllegalArgumentException) {
-            setConnectionState(STATUS_INVALID_URL); updateNotification("Invalid server URL"); return
-        }
+        val request = try { Request.Builder().url(endpoint).header("Authorization", "Bearer $token").build() } catch (_: IllegalArgumentException) { setConnectionState(STATUS_INVALID_URL); updateNotification("Invalid server URL"); return }
         try {
             webSocket = client.newWebSocket(request, object : WebSocketListener() {
                 override fun onOpen(socket: WebSocket, response: Response) {
@@ -81,76 +69,34 @@ class WebSocketService : Service() {
             })
         } catch (_: IllegalArgumentException) { webSocket = null; setConnectionState(STATUS_INVALID_URL); updateNotification("Invalid server URL") }
     }
-
     private fun handleMessage(socket: WebSocket, text: String) {
         if (webSocket !== socket) return
-        val message = try { JSONObject(text) } catch (_: Exception) { return }
-        if (message.optString("type") != "command") return
-        val id = message.optString("id")
-        val result = JSONObject().apply { put("type", "command_result"); put("id", id) }
-        var asyncResult = false
+        val message = try { JSONObject(text) } catch (_: Exception) { return }; if (message.optString("type") != "command") return
+        val id = message.optString("id"); val result = JSONObject().apply { put("type", "command_result"); put("id", id) }; var asyncResult = false
         when (message.optString("command")) {
-            "get_status" -> {
-                val prefs = getSharedPreferences(LocationService.PREFS, MODE_PRIVATE)
-                val active = prefs.getBoolean(LocationService.KEY_ACTIVE, false); val paused = prefs.getBoolean(LocationService.KEY_PAUSED, false)
-                result.put("ok", true).put("status", "online").put("locationSessionActive", active).put("locationSessionPaused", paused)
-                    .put("steps", prefs.getLong(LocationService.KEY_STEPS, 0L).coerceAtLeast(0L)).put("stepsAvailable", prefs.getBoolean(LocationService.KEY_STEPS_AVAILABLE, false))
-                    .put("cameraRemoteEnabled", RemoteCameraService.isActive()).put("screenShareEnabled", RemoteScreenService.isActive())
-            }
+            "get_status" -> { val prefs = getSharedPreferences(LocationService.PREFS, MODE_PRIVATE); result.put("ok", true).put("status", "online").put("locationSessionActive", prefs.getBoolean(LocationService.KEY_ACTIVE, false)).put("locationSessionPaused", prefs.getBoolean(LocationService.KEY_PAUSED, false)).put("steps", prefs.getLong(LocationService.KEY_STEPS, 0L).coerceAtLeast(0L)).put("stepsAvailable", prefs.getBoolean(LocationService.KEY_STEPS_AVAILABLE, false)).put("cameraRemoteEnabled", RemoteCameraService.isActive()).put("screenShareEnabled", RemoteScreenService.isActive()) }
             "get_permissions" -> result.put("ok", true).put("grantedPermissions", PermissionManager.runtimePermissions().filter { ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED })
             "get_device_info" -> result.put("ok", true).put("manufacturer", Build.MANUFACTURER).put("model", Build.MODEL).put("androidApi", Build.VERSION.SDK_INT).put("appVersion", BuildConfig.VERSION_NAME).put("deviceId", Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID) ?: "unknown-device")
-            "get_battery" -> {
-                val manager = getSystemService(BatteryManager::class.java); val level = manager?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: -1; val status = manager?.getIntProperty(BatteryManager.BATTERY_PROPERTY_STATUS) ?: -1
-                result.put("ok", true).put("percent", level).put("charging", status == BatteryManager.BATTERY_STATUS_CHARGING || status == BatteryManager.BATTERY_STATUS_FULL)
-            }
-            "get_network" -> {
-                val connectivity = getSystemService(ConnectivityManager::class.java); val capabilities = connectivity?.activeNetwork?.let { connectivity.getNetworkCapabilities(it) }
-                val transport = when { capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true -> "wifi"; capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) == true -> "cellular"; capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) == true -> "ethernet"; capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true -> "vpn"; else -> "none" }
-                result.put("ok", true).put("connected", capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true).put("validated", capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true).put("transport", transport)
-            }
-            "get_storage" -> {
-                val stat = StatFs(Environment.getDataDirectory().path); val total = stat.totalBytes.coerceAtLeast(0L); val free = stat.availableBytes.coerceAtLeast(0L).coerceAtMost(total); val used = (total - free).coerceAtLeast(0L)
-                val photos = queryMediaBytes(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, mediaPermission()); val videos = queryMediaBytes(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, mediaPermission()); val audio = queryMediaBytes(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, mediaPermission())
-                val media = (photos + videos + audio).coerceAtMost(used)
-                result.put("ok", true).put("totalBytes", total).put("freeBytes", free).put("usedBytes", used).put("photosBytes", photos).put("videosBytes", videos).put("audioBytes", audio).put("otherBytes", (used - media).coerceAtLeast(0L)).put("breakdownApproximate", true)
-            }
+            "get_battery" -> { val manager = getSystemService(BatteryManager::class.java); val level = manager?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: -1; val status = manager?.getIntProperty(BatteryManager.BATTERY_PROPERTY_STATUS) ?: -1; result.put("ok", true).put("percent", level).put("charging", status == BatteryManager.BATTERY_STATUS_CHARGING || status == BatteryManager.BATTERY_STATUS_FULL) }
+            "get_network" -> { val connectivity = getSystemService(ConnectivityManager::class.java); val capabilities = connectivity?.activeNetwork?.let { connectivity.getNetworkCapabilities(it) }; val transport = when { capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true -> "wifi"; capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) == true -> "cellular"; capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) == true -> "ethernet"; capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true -> "vpn"; else -> "none" }; result.put("ok", true).put("connected", capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true).put("validated", capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true).put("transport", transport) }
+            "get_storage" -> { val stat = StatFs(Environment.getDataDirectory().path); val total = stat.totalBytes.coerceAtLeast(0L); val free = stat.availableBytes.coerceAtLeast(0L).coerceAtMost(total); val used = (total - free).coerceAtLeast(0L); val photos = queryMediaBytes(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, mediaPermission(Manifest.permission.READ_MEDIA_IMAGES)); val videos = queryMediaBytes(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, mediaPermission(Manifest.permission.READ_MEDIA_VIDEO)); val audio = queryMediaBytes(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, mediaPermission(Manifest.permission.READ_MEDIA_AUDIO)); val media = (photos + videos + audio).coerceAtMost(used); result.put("ok", true).put("totalBytes", total).put("freeBytes", free).put("usedBytes", used).put("photosBytes", photos).put("videosBytes", videos).put("audioBytes", audio).put("otherBytes", (used - media).coerceAtLeast(0L)).put("breakdownApproximate", true) }
             "get_contacts_count" -> if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED) result.put("ok", false).put("error", "READ_CONTACTS permission is required") else result.put("ok", true).put("contactsCount", contentResolver.query(ContactsContract.Contacts.CONTENT_URI, arrayOf(ContactsContract.Contacts._ID), null, null, null)?.use { it.count } ?: 0)
             "get_calendar_count" -> if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CALENDAR) != PackageManager.PERMISSION_GRANTED) result.put("ok", false).put("error", "READ_CALENDAR permission is required") else result.put("ok", true).put("calendarCount", contentResolver.query(CalendarContract.Calendars.CONTENT_URI, arrayOf(CalendarContract.Calendars._ID), null, null, null)?.use { it.count } ?: 0)
-            "get_location" -> {
-                val prefs = getSharedPreferences(LocationService.PREFS, MODE_PRIVATE); val active = prefs.getBoolean(LocationService.KEY_ACTIVE, false); val paused = prefs.getBoolean(LocationService.KEY_PAUSED, false); val latitude = prefs.getString(LocationService.KEY_LATITUDE, null); val longitude = prefs.getString(LocationService.KEY_LONGITUDE, null); val time = prefs.getLong(LocationService.KEY_TIME, 0L); val accuracy = prefs.getFloat(LocationService.KEY_ACCURACY, -1f)
-                if (!active) result.put("ok", false).put("error", "Location session is not active; start it from the Tost app") else if (latitude == null || longitude == null || time <= 0L) result.put("ok", false).put("error", "Location session is active but no location fix is available yet") else result.put("ok", true).put("source", "location_session").put("paused", paused).put("timestamp", time).put("latitude", latitude).put("longitude", longitude).put("accuracyMeters", accuracy).put("route", getRoute(prefs)).put("metrics", getRouteMetrics(prefs))
-            }
+            "get_location" -> { val prefs = getSharedPreferences(LocationService.PREFS, MODE_PRIVATE); val active = prefs.getBoolean(LocationService.KEY_ACTIVE, false); val paused = prefs.getBoolean(LocationService.KEY_PAUSED, false); val latitude = prefs.getString(LocationService.KEY_LATITUDE, null); val longitude = prefs.getString(LocationService.KEY_LONGITUDE, null); val time = prefs.getLong(LocationService.KEY_TIME, 0L); val accuracy = prefs.getFloat(LocationService.KEY_ACCURACY, -1f); if (!active) result.put("ok", false).put("error", "Location session is not active; start it from the Tost app") else if (latitude == null || longitude == null || time <= 0L) result.put("ok", false).put("error", "Location session is active but no location fix is available yet") else result.put("ok", true).put("source", "location_session").put("paused", paused).put("timestamp", time).put("latitude", latitude).put("longitude", longitude).put("accuracyMeters", accuracy).put("route", getRoute(prefs)).put("metrics", getRouteMetrics(prefs)) }
             "get_workout_history" -> result.put("ok", true).put("workouts", WorkoutHistory.list(this))
             "get_workout" -> { val workout = WorkoutHistory.get(this, message.optString("workoutId")); if (workout == null) result.put("ok", false).put("error", "Workout not found") else result.put("ok", true).put("workout", workout) }
             "get_camera_status" -> result.put("ok", true).put("enabled", RemoteCameraService.isActive()).put("cameraPermission", ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED)
             "get_screen_status" -> result.put("ok", true).put("enabled", RemoteScreenService.isActive())
-            "get_camera_snapshot" -> {
-                asyncResult = true
-                RemoteCameraService.requestSnapshot { bytes -> if (bytes == null) result.put("ok", false).put("error", "Remote camera is not enabled or is not ready") else result.put("ok", true).put("mimeType", "image/jpeg").put("imageBase64", Base64.encodeToString(bytes, Base64.NO_WRAP)); socket.send(result.toString()) }
-            }
-            "get_screen_snapshot" -> {
-                asyncResult = true
-                RemoteScreenService.requestSnapshot { bytes -> if (bytes == null) result.put("ok", false).put("error", "Screen sharing is not enabled or is not ready") else result.put("ok", true).put("mimeType", "image/jpeg").put("imageBase64", Base64.encodeToString(bytes, Base64.NO_WRAP)); socket.send(result.toString()) }
-            }
+            "get_camera_snapshot" -> { asyncResult = true; RemoteCameraService.requestSnapshot { bytes -> if (bytes == null) result.put("ok", false).put("error", "Remote camera is not enabled or is not ready") else result.put("ok", true).put("mimeType", "image/jpeg").put("imageBase64", Base64.encodeToString(bytes, Base64.NO_WRAP)); socket.send(result.toString()) } }
+            "get_screen_snapshot" -> { asyncResult = true; RemoteScreenService.requestSnapshot { bytes -> if (bytes == null) result.put("ok", false).put("error", "Screen sharing is not enabled or is not ready") else result.put("ok", true).put("mimeType", "image/jpeg").put("imageBase64", Base64.encodeToString(bytes, Base64.NO_WRAP)); socket.send(result.toString()) } }
             else -> result.put("ok", false).put("error", "Unsupported command")
         }
         if (!asyncResult) socket.send(result.toString())
     }
-
-    private fun mediaPermission(): String = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_IMAGES else Manifest.permission.READ_EXTERNAL_STORAGE
-    private fun queryMediaBytes(uri: android.net.Uri, permission: String): Long {
-        if (ContextCompat.checkSelfPermission(this, permission) != PackageManager.PERMISSION_GRANTED) return 0L
-        return try { contentResolver.query(uri, arrayOf(MediaStore.MediaColumns.SIZE), null, null, null)?.use { cursor -> val index = cursor.getColumnIndex(MediaStore.MediaColumns.SIZE); if (index < 0) return@use 0L; var total = 0L; while (cursor.moveToNext()) total += cursor.getLong(index).coerceAtLeast(0L); total } ?: 0L } catch (_: SecurityException) { 0L }
-    }
-
+    private fun mediaPermission(permission: String): String = if (Build.VERSION.SDK_INT >= 33) permission else Manifest.permission.READ_EXTERNAL_STORAGE
+    private fun queryMediaBytes(uri: android.net.Uri, permission: String): Long { if (ContextCompat.checkSelfPermission(this, permission) != PackageManager.PERMISSION_GRANTED) return 0L; return try { contentResolver.query(uri, arrayOf(MediaStore.MediaColumns.SIZE), null, null, null)?.use { cursor -> val index = cursor.getColumnIndex(MediaStore.MediaColumns.SIZE); if (index < 0) return@use 0L; var total = 0L; while (cursor.moveToNext()) total += cursor.getLong(index).coerceAtLeast(0L); total } ?: 0L } catch (_: SecurityException) { 0L } }
     private fun getRoute(prefs: android.content.SharedPreferences): JSONArray = try { JSONArray(prefs.getString(LocationService.KEY_ROUTE, "[]")) } catch (_: Exception) { JSONArray() }
-    private fun getRouteMetrics(prefs: android.content.SharedPreferences): JSONObject {
-        val route = getRoute(prefs); var distanceMeters = 0.0; var previousLat = 0.0; var previousLon = 0.0; var hasPrevious = false
-        for (index in 0 until route.length()) { val point = route.optJSONObject(index) ?: continue; val lat = point.optDouble("latitude", Double.NaN); val lon = point.optDouble("longitude", Double.NaN); if (!lat.isFinite() || !lon.isFinite() || kotlin.math.abs(lat) > 90 || kotlin.math.abs(lon) > 180) continue; if (hasPrevious) { val results = FloatArray(1); android.location.Location.distanceBetween(previousLat, previousLon, lat, lon, results); val distance = results[0].toDouble(); if (distance <= MAX_POINT_JUMP_METERS) distanceMeters += distance }; previousLat = lat; previousLon = lon; hasPrevious = true }
-        val sessionStart = prefs.getLong(LocationService.KEY_SESSION_START, 0L); val pausedMs = prefs.getLong(LocationService.KEY_PAUSED_MS, 0L).coerceAtLeast(0L); val currentlyPaused = prefs.getBoolean(LocationService.KEY_PAUSED, false); val pauseStarted = prefs.getLong(LocationService.KEY_PAUSE_STARTED, 0L); val currentPauseMs = if (currentlyPaused && pauseStarted > 0L) (System.currentTimeMillis() - pauseStarted).coerceAtLeast(0L) else 0L
-        val durationSeconds = if (sessionStart > 0L) ((System.currentTimeMillis() - sessionStart - pausedMs - currentPauseMs).coerceAtLeast(0L) / 1000L) else 0L; val averageSpeedMps = if (durationSeconds > 0) distanceMeters / durationSeconds else 0.0; val paceSecondsPerKm = if (averageSpeedMps > 0.1) 1000.0 / averageSpeedMps else 0.0
-        return JSONObject().put("distanceMeters", distanceMeters).put("durationSeconds", durationSeconds).put("averageSpeedMps", averageSpeedMps).put("paceSecondsPerKm", paceSecondsPerKm).put("routePoints", route.length()).put("steps", prefs.getLong(LocationService.KEY_STEPS, 0L).coerceAtLeast(0L)).put("stepsAvailable", prefs.getBoolean(LocationService.KEY_STEPS_AVAILABLE, false)).put("paused", currentlyPaused)
-    }
+    private fun getRouteMetrics(prefs: android.content.SharedPreferences): JSONObject { val route = getRoute(prefs); var distanceMeters = 0.0; var previousLat = 0.0; var previousLon = 0.0; var hasPrevious = false; for (index in 0 until route.length()) { val point = route.optJSONObject(index) ?: continue; val lat = point.optDouble("latitude", Double.NaN); val lon = point.optDouble("longitude", Double.NaN); if (!lat.isFinite() || !lon.isFinite() || kotlin.math.abs(lat) > 90 || kotlin.math.abs(lon) > 180) continue; if (hasPrevious) { val results = FloatArray(1); android.location.Location.distanceBetween(previousLat, previousLon, lat, lon, results); val distance = results[0].toDouble(); if (distance <= MAX_POINT_JUMP_METERS) distanceMeters += distance }; previousLat = lat; previousLon = lon; hasPrevious = true }; val sessionStart = prefs.getLong(LocationService.KEY_SESSION_START, 0L); val pausedMs = prefs.getLong(LocationService.KEY_PAUSED_MS, 0L).coerceAtLeast(0L); val currentlyPaused = prefs.getBoolean(LocationService.KEY_PAUSED, false); val pauseStarted = prefs.getLong(LocationService.KEY_PAUSE_STARTED, 0L); val currentPauseMs = if (currentlyPaused && pauseStarted > 0L) (System.currentTimeMillis() - pauseStarted).coerceAtLeast(0L) else 0L; val durationSeconds = if (sessionStart > 0L) ((System.currentTimeMillis() - sessionStart - pausedMs - currentPauseMs).coerceAtLeast(0L) / 1000L) else 0L; val averageSpeedMps = if (durationSeconds > 0) distanceMeters / durationSeconds else 0.0; val paceSecondsPerKm = if (averageSpeedMps > 0.1) 1000.0 / averageSpeedMps else 0.0; return JSONObject().put("distanceMeters", distanceMeters).put("durationSeconds", durationSeconds).put("averageSpeedMps", averageSpeedMps).put("paceSecondsPerKm", paceSecondsPerKm).put("routePoints", route.length()).put("steps", prefs.getLong(LocationService.KEY_STEPS, 0L).coerceAtLeast(0L)).put("stepsAvailable", prefs.getBoolean(LocationService.KEY_STEPS_AVAILABLE, false)).put("paused", currentlyPaused) }
     private fun scheduleReconnect() { handler.removeCallbacks(reconnectRunnable); val delayMs = min(60_000L, 2_000L * (1L shl min(reconnectAttempt, 5))); reconnectAttempt++; setConnectionState(STATUS_RECONNECTING); updateNotification("Reconnecting in ${delayMs / 1000}s"); handler.postDelayed(reconnectRunnable, delayMs) }
     private fun startAsForeground(): Boolean { val notification = buildNotification("Connecting…"); val type = if (Build.VERSION.SDK_INT >= 29) android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC else 0; return try { ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, type); true } catch (_: SecurityException) { setConnectionState(STATUS_START_FAILED); updateNotification("Foreground service permission/start not allowed"); stopSelf(); false } catch (_: IllegalStateException) { setConnectionState(STATUS_START_FAILED); updateNotification("Foreground service cannot start from the current app state"); stopSelf(); false } }
     private fun setConnectionState(state: String) { getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString(KEY_CONNECTION_STATUS, state).apply() }
@@ -160,12 +106,5 @@ class WebSocketService : Service() {
     override fun onTimeout(startId: Int, fgsType: Int) { stopConnectionAndService() }
     override fun onDestroy() { stopping = true; handler.removeCallbacksAndMessages(null); webSocket?.close(1000, "Service destroyed"); webSocket = null; client.dispatcher.executorService.shutdown(); super.onDestroy() }
     override fun onBind(intent: Intent?): IBinder? = null
-
-    companion object {
-        const val PREFS = "tost_connection"; const val KEY_SERVER_URL = "server_url"; const val KEY_TOKEN = "token"; const val KEY_CONNECTION_STATUS = "connection_status"
-        const val STATUS_CONNECTING = "Connecting"; const val STATUS_CONNECTED = "Connected"; const val STATUS_RECONNECTING = "Reconnecting"; const val STATUS_DISCONNECTED = "Disconnected"; const val STATUS_NOT_CONFIGURED = "Not configured"; const val STATUS_INVALID_URL = "Invalid server URL"; const val STATUS_START_FAILED = "Connection service failed to start"; const val ACTION_STOP = "com.tost.permissionbridge.STOP"
-        private const val CHANNEL_ID = "tost_connection"; private const val NOTIFICATION_ID = 1001; private const val MAX_POINT_JUMP_METERS = 500.0
-        fun start(context: Context) = try { ContextCompat.startForegroundService(context, Intent(context, WebSocketService::class.java)) } catch (_: SecurityException) { Unit } catch (_: IllegalStateException) { Unit }
-        fun stop(context: Context) = context.startService(Intent(context, WebSocketService::class.java).setAction(ACTION_STOP))
-    }
+    companion object { const val PREFS = "tost_connection"; const val KEY_SERVER_URL = "server_url"; const val KEY_TOKEN = "token"; const val KEY_CONNECTION_STATUS = "connection_status"; const val STATUS_CONNECTING = "Connecting"; const val STATUS_CONNECTED = "Connected"; const val STATUS_RECONNECTING = "Reconnecting"; const val STATUS_DISCONNECTED = "Disconnected"; const val STATUS_NOT_CONFIGURED = "Not configured"; const val STATUS_INVALID_URL = "Invalid server URL"; const val STATUS_START_FAILED = "Connection service failed to start"; const val ACTION_STOP = "com.tost.permissionbridge.STOP"; private const val CHANNEL_ID = "tost_connection"; private const val NOTIFICATION_ID = 1001; private const val MAX_POINT_JUMP_METERS = 500.0; fun start(context: Context) = try { ContextCompat.startForegroundService(context, Intent(context, WebSocketService::class.java)) } catch (_: SecurityException) { Unit } catch (_: IllegalStateException) { Unit }; fun stop(context: Context) = context.startService(Intent(context, WebSocketService::class.java).setAction(ACTION_STOP)) }
 }
