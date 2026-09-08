@@ -34,6 +34,13 @@ async function mediaCommand(deviceId, command, panel) {
     if (!response.ok || !data.ok) throw new Error(data.error || "Request failed");
     mediaPending.set(data.id, panel);
     panel.status.textContent = `Waiting for ${label} frame…`;
+    setTimeout(() => {
+      if (!mediaPending.has(data.id)) return;
+      mediaPending.delete(data.id);
+      mediaBusy.delete(deviceId);
+      panel.status.textContent = `${label} frame timed out`;
+      updateMediaButtons(panel);
+    }, 5000);
     return data.id;
   } catch (error) {
     mediaBusy.delete(deviceId);
@@ -130,7 +137,7 @@ function addMediaPanel(card, deviceId) {
     otherButton.textContent = command === "get_camera_snapshot" ? "Live screen" : "Live camera";
     status.textContent = "Live preview starting…";
     mediaCommand(deviceId, command, panel);
-    mediaTimers.set(deviceId, setInterval(() => mediaCommand(deviceId, command, panel), 1000));
+    mediaTimers.set(deviceId, setInterval(() => mediaCommand(deviceId, command, panel), 350));
   }
 
   cameraLive.onclick = () => toggleLive(cameraLive, "get_camera_snapshot", screenLive);
