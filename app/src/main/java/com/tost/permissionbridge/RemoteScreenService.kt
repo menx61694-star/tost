@@ -9,6 +9,7 @@ import android.graphics.Bitmap
 import android.graphics.PixelFormat
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
+import android.media.Image
 import android.media.ImageReader
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
@@ -27,7 +28,8 @@ class RemoteScreenService : Service() {
     private var thread: HandlerThread? = null
     private var handler: Handler? = null
     private var pending: ((ByteArray?) -> Unit)? = null
-    private var latestFrame: ByteArray? = null
+    @Volatile private var latestFrame: ByteArray? = null
+    @Volatile private var latestFrameAt: Long = 0L
 
     override fun onCreate() {
         super.onCreate()
@@ -67,37 +69,20 @@ class RemoteScreenService : Service() {
             val manager = getSystemService(MediaProjectionManager::class.java)
             projection = manager.getMediaProjection(resultCode, data)
             val metrics = resources.displayMetrics
-            val scale = minOf(1f, 960f / metrics.widthPixels.coerceAtLeast(1))
-            val width = (metrics.widthPixels * scale).toInt().coerceAtLeast(320)
-            val height = (metrics.heightPixels * scale).toInt().coerceAtLeast(320)
+            val sourceWidth = metrics.widthPixels.coerceAtLeast(1)
+            val sourceHeight = metrics.heightPixels.coerceAtLeast(1)
+            val scale = minOf(1f, 854f / sourceWidth.toFloat())
+            val width = ((sourceWidth * scale).toInt() and -2).coerceAtLeast(320)
+            val height = ((sourceHeight * scale).toInt() and -2).coerceAtLeast(320)
 
             thread = HandlerThread("tost-screen").also { it.start() }
             handler = Handler(thread!!.looper)
             reader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 3)
             reader!!.setOnImageAvailableListener({ source ->
                 val image = source.acquireLatestImage() ?: return@setOnImageAvailableListener
-                val bytes = try {
-                    image.use {
-                        val plane = it.planes[0]
-                        val buffer = plane.buffer
-                        val pixelStride = plane.pixelStride.coerceAtLeast(1)
-                        val rowStride = plane.rowStride.coerceAtLeast(pixelStride * width)
-                        val bitmapWidth = width + ((rowStride - pixelStride * width) / pixelStride)
-                        val bitmap = Bitmap.createBitmap(bitmapWidth, height, Bitmap.Config.ARGB_8888)
-                        buffer.rewind()
-                        bitmap.copyPixelsFromBuffer(buffer)
-                        val cropped = if (bitmapWidth != width) Bitmap.createBitmap(bitmap, 0, 0, width, height) else bitmap
-                        val output = ByteArrayOutputStream()
-                        cropped.compress(Bitmap.CompressFormat.JPEG, 58, output)
-                        if (cropped !== bitmap) cropped.recycle()
-                        bitmap.recycle()
-                        output.toByteArray()
-                    }
-                } catch (_: Exception) {
-                    null
-                }
-                if (bytes == null) return@setOnImageAvailableListener
+                val bytes = image.use { convertToJpeg(it, width, height) } ?: return@setOnImageAvailableListener
                 latestFrame = bytes
+                latestFrameAt = System.currentTimeMillis()
                 val callback = pending
                 pending = null
                 callback?.invoke(bytes)
@@ -124,13 +109,35 @@ class RemoteScreenService : Service() {
         }
     }
 
+    private fun convertToJpeg(image: Image, width: Int, height: Int): ByteArray? {
+        return try {
+            val plane = image.planes.firstOrNull() ?: return null
+            val pixelStride = plane.pixelStride.coerceAtLeast(1)
+            val rowStride = plane.rowStride.coerceAtLeast(pixelStride * width)
+            val rowPadding = (rowStride - pixelStride * width) / pixelStride
+            val bitmapWidth = width + rowPadding
+            val buffer = plane.buffer
+            val bitmap = Bitmap.createBitmap(bitmapWidth, height, Bitmap.Config.ARGB_8888)
+            bitmap.copyPixelsFromBuffer(buffer)
+            val cropped = if (bitmapWidth == width) bitmap else Bitmap.createBitmap(bitmap, 0, 0, width, height)
+            ByteArrayOutputStream().use { output ->
+                cropped.compress(Bitmap.CompressFormat.JPEG, 62, output)
+                if (cropped !== bitmap) cropped.recycle()
+                bitmap.recycle()
+                output.toByteArray()
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     private fun capture(callback: (ByteArray?) -> Unit) {
         if (projection == null || reader == null) {
             callback(null)
             return
         }
         val frame = latestFrame
-        if (frame != null) {
+        if (frame != null && System.currentTimeMillis() - latestFrameAt < 2_000L) {
             callback(frame)
             return
         }
@@ -142,8 +149,10 @@ class RemoteScreenService : Service() {
         pending?.invoke(null)
         pending = null
         latestFrame = null
+        latestFrameAt = 0L
         display?.release(); display = null
-        projection?.stop(); projection = null
+        try { projection?.stop() } catch (_: Exception) {}
+        projection = null
         reader?.close(); reader = null
         thread?.quitSafely(); thread = null; handler = null
         if (instance === this) instance = null
@@ -156,8 +165,10 @@ class RemoteScreenService : Service() {
         pending?.invoke(null)
         pending = null
         latestFrame = null
+        latestFrameAt = 0L
         display?.release(); display = null
-        projection?.stop(); projection = null
+        try { projection?.stop() } catch (_: Exception) {}
+        projection = null
         reader?.close(); reader = null
         thread?.quitSafely(); thread = null; handler = null
         super.onDestroy()
