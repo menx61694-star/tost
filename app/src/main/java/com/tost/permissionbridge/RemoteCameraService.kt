@@ -11,6 +11,8 @@ import android.graphics.ImageFormat
 import android.hardware.camera2.CameraCaptureSession
 import android.hardware.camera2.CameraDevice
 import android.hardware.camera2.CameraManager
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.params.StreamConfigurationMap
 import android.media.ImageReader
 import android.os.Build
 import android.os.Handler
@@ -64,9 +66,12 @@ class RemoteCameraService : Service() {
         try {
             val cameraId = cameraManager.cameraIdList.firstOrNull { id ->
                 val c = cameraManager.getCameraCharacteristics(id)
-                c.get(android.hardware.camera2.CameraCharacteristics.LENS_FACING) == android.hardware.camera2.CameraCharacteristics.LENS_FACING_BACK
+                c.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK
             } ?: cameraManager.cameraIdList.firstOrNull() ?: return
-            reader = ImageReader.newInstance(960, 540, ImageFormat.JPEG, 3).also { imageReader ->
+            val characteristics = cameraManager.getCameraCharacteristics(cameraId)
+            val config = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+            val size = chooseJpegSize(config)
+            reader = ImageReader.newInstance(size.first, size.second, ImageFormat.JPEG, 3).also { imageReader ->
                 imageReader.setOnImageAvailableListener({ source ->
                     val image = source.acquireLatestImage() ?: return@setOnImageAvailableListener
                     val bytes = image.use { imageData ->
@@ -101,6 +106,15 @@ class RemoteCameraService : Service() {
         }
     }
 
+    private fun chooseJpegSize(config: StreamConfigurationMap?): Pair<Int, Int> {
+        val sizes = config?.getOutputSizes(ImageFormat.JPEG).orEmpty()
+        val preferred = sizes.filter { it.width <= 1280 && it.height <= 720 }
+            .maxByOrNull { it.width.toLong() * it.height.toLong() }
+        val fallback = sizes.minByOrNull { kotlin.math.abs(it.width - 1280) + kotlin.math.abs(it.height - 720) }
+        val chosen = preferred ?: fallback
+        return if (chosen != null) chosen.width to chosen.height else 640 to 480
+    }
+
     private fun startRepeating() {
         val device = camera ?: return
         val captureSession = session ?: return
@@ -109,7 +123,7 @@ class RemoteCameraService : Service() {
         try {
             val request = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
                 addTarget(output)
-                set(android.hardware.camera2.CaptureRequest.JPEG_QUALITY, 58.toByte())
+                set(android.hardware.camera2.CaptureRequest.JPEG_QUALITY, 55.toByte())
             }.build()
             captureSession.setRepeatingRequest(request, null, handler)
             repeating = true
@@ -136,7 +150,7 @@ class RemoteCameraService : Service() {
         pending = null
         repeating = false
         latestFrame = null
-        session?.stopRepeating()
+        try { session?.stopRepeating() } catch (_: Exception) {}
         session?.close(); session = null
         camera?.close(); camera = null
         reader?.close(); reader = null
@@ -152,6 +166,7 @@ class RemoteCameraService : Service() {
         pending = null
         repeating = false
         latestFrame = null
+        try { session?.stopRepeating() } catch (_: Exception) {}
         session?.close(); session = null
         camera?.close(); camera = null
         reader?.close(); reader = null
