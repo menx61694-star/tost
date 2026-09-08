@@ -4,19 +4,25 @@ document.head.appendChild(mediaStyle);
 
 const mediaPending = new Map();
 const mediaTimers = new Map();
+const mediaBusy = new Set();
 
 window.addEventListener("tost-media-frame", event => {
   const { id, result } = event.detail || {};
   const panel = mediaPending.get(id);
   if (!panel) return;
   mediaPending.delete(id);
+  mediaBusy.delete(panel.deviceId);
   renderMediaFrame(panel, result);
+  updateMediaButtons(panel);
 });
 
 async function mediaCommand(deviceId, command, panel) {
+  if (mediaBusy.has(deviceId)) return null;
   const token = document.getElementById("token")?.value.trim();
   if (!token) { panel.status.textContent = "Connect to the server first."; return null; }
   const label = command === "get_camera_snapshot" ? "camera" : "screen";
+  mediaBusy.add(deviceId);
+  updateMediaButtons(panel);
   panel.status.textContent = `Requesting ${label}…`;
   try {
     const response = await fetch(`/api/devices/${encodeURIComponent(deviceId)}/command`, {
@@ -30,7 +36,9 @@ async function mediaCommand(deviceId, command, panel) {
     panel.status.textContent = `Waiting for ${label} frame…`;
     return data.id;
   } catch (error) {
+    mediaBusy.delete(deviceId);
     panel.status.textContent = error.message;
+    updateMediaButtons(panel);
     return null;
   }
 }
@@ -43,8 +51,8 @@ function renderMediaFrame(panel, result) {
   panel.image.src = `data:${result.mimeType || "image/jpeg"};base64,${result.imageBase64}`;
   panel.image.hidden = false;
   panel.placeholder.hidden = true;
-  panel.meta.textContent = `${result.mimeType || "image/jpeg"} · ${Math.round(result.imageBase64.length * 0.75 / 1024)} KB`;
-  panel.status.textContent = "Frame updated · " + new Date().toLocaleTimeString();
+  panel.meta.textContent = `${result.mimeType || "image/jpeg"} · ${Math.round(result.imageBase64.length * 0.75 / 1024)} KB · ${new Date().toLocaleTimeString()}`;
+  panel.status.textContent = "Frame updated";
 }
 
 function stopMediaTimer(deviceId) {
@@ -53,11 +61,43 @@ function stopMediaTimer(deviceId) {
   mediaTimers.delete(deviceId);
 }
 
+async function refreshMediaStatus(deviceId, panel) {
+  const device = devices.find(d => d.deviceId === deviceId);
+  if (!device || device.status !== "online") {
+    panel.status.textContent = "Device offline";
+    updateMediaButtons(panel);
+    return;
+  }
+  try {
+    const token = document.getElementById("token")?.value.trim();
+    const response = await fetch(`/api/devices/${encodeURIComponent(deviceId)}/command`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ command: "get_status" })
+    });
+    const data = await response.json();
+    if (!response.ok || !data.ok) return;
+    panel.cameraReady = data.cameraRemoteEnabled === true;
+    panel.screenReady = data.screenShareEnabled === true;
+    panel.status.textContent = panel.cameraReady || panel.screenReady ? "Remote mode ready" : "Enable Camera / Screen Share on the phone";
+    updateMediaButtons(panel);
+  } catch (_) {}
+}
+
+function updateMediaButtons(panel) {
+  const online = devices.some(d => d.deviceId === panel.deviceId && d.status === "online");
+  const busy = mediaBusy.has(panel.deviceId);
+  panel.camera.disabled = busy || !online || panel.cameraReady === false;
+  panel.screen.disabled = busy || !online || panel.screenReady === false;
+  panel.cameraLive.disabled = busy || !online || panel.cameraReady === false;
+  panel.screenLive.disabled = busy || !online || panel.screenReady === false;
+}
+
 function addMediaPanel(card, deviceId) {
   if (card.querySelector(".remote-media-panel")) return;
   const panel = document.createElement("section");
   panel.className = "remote-media-panel";
-  panel.innerHTML = `<div class="media-heading"><div><span class="eyebrow">REMOTE ACCESS</span><h3>Camera & screen</h3><small>Requires explicit activation on the phone. Android privacy indicators remain visible.</small></div><span class="media-status">Ready</span></div><div class="media-actions"><button class="media-camera">Camera snapshot</button><button class="media-screen">Screen snapshot</button><button class="media-camera-live">Live camera</button><button class="media-screen-live">Live screen</button></div><div class="media-view"><div class="media-placeholder">No remote frame yet.</div><img alt="Remote device preview" hidden></div><div class="media-meta">Waiting for a frame</div>`;
+  panel.innerHTML = `<div class="media-heading"><div><span class="eyebrow">REMOTE ACCESS</span><h3>Camera & screen</h3><small>Enable the desired mode on the phone first. Android privacy indicators remain visible.</small></div><span class="media-status">Checking…</span></div><div class="media-actions"><button class="media-camera">Camera snapshot</button><button class="media-screen">Screen snapshot</button><button class="media-camera-live">Live camera</button><button class="media-screen-live">Live screen</button></div><div class="media-view"><div class="media-placeholder">No remote frame yet.</div><img alt="Remote device preview" hidden></div><div class="media-meta">Waiting for a frame</div>`;
   card.appendChild(panel);
 
   const status = panel.querySelector(".media-status");
@@ -68,18 +108,10 @@ function addMediaPanel(card, deviceId) {
   const cameraLive = panel.querySelector(".media-camera-live");
   const screenLive = panel.querySelector(".media-screen-live");
   const meta = panel.querySelector(".media-meta");
-  const state = { status, image, placeholder, meta };
+  Object.assign(panel, { deviceId, status, image, placeholder, camera, screen, cameraLive, screenLive, meta, cameraReady: false, screenReady: false });
 
-  const setButtons = (busy = false) => {
-    const online = devices.find(d => d.deviceId === deviceId)?.status === "online";
-    camera.disabled = busy || !online;
-    screen.disabled = busy || !online;
-    cameraLive.disabled = busy || !online;
-    screenLive.disabled = busy || !online;
-  };
-
-  camera.onclick = () => mediaCommand(deviceId, "get_camera_snapshot", state);
-  screen.onclick = () => mediaCommand(deviceId, "get_screen_snapshot", state);
+  camera.onclick = () => mediaCommand(deviceId, "get_camera_snapshot", panel);
+  screen.onclick = () => mediaCommand(deviceId, "get_screen_snapshot", panel);
 
   function toggleLive(button, command, otherButton) {
     if (mediaTimers.has(deviceId)) {
@@ -89,7 +121,7 @@ function addMediaPanel(card, deviceId) {
       cameraLive.textContent = "Live camera";
       screenLive.textContent = "Live screen";
       status.textContent = "Live preview stopped";
-      setButtons(false);
+      updateMediaButtons(panel);
       return;
     }
     button.classList.add("media-live-active");
@@ -97,13 +129,15 @@ function addMediaPanel(card, deviceId) {
     button.textContent = command === "get_camera_snapshot" ? "Stop live camera" : "Stop live screen";
     otherButton.textContent = command === "get_camera_snapshot" ? "Live screen" : "Live camera";
     status.textContent = "Live preview starting…";
-    setButtons(false);
-    mediaCommand(deviceId, command, state);
-    mediaTimers.set(deviceId, setInterval(() => mediaCommand(deviceId, command, state), 700));
+    mediaCommand(deviceId, command, panel);
+    mediaTimers.set(deviceId, setInterval(() => mediaCommand(deviceId, command, panel), 1000));
   }
 
   cameraLive.onclick = () => toggleLive(cameraLive, "get_camera_snapshot", screenLive);
   screenLive.onclick = () => toggleLive(screenLive, "get_screen_snapshot", cameraLive);
+  updateMediaButtons(panel);
+  refreshMediaStatus(deviceId, panel);
+  panel.statusTimer = setInterval(() => refreshMediaStatus(deviceId, panel), 5000);
 }
 
 function scanMediaPanels() {
